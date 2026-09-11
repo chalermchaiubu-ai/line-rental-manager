@@ -1069,7 +1069,10 @@ const RICHMENU_AREAS = [
 ];
 
 app.get('/admin/richmenu/setup', async (req, res) => {
-  if (!LINE_CHANNEL_SECRET || req.query.secret !== LINE_CHANNEL_SECRET) {
+  // Uses its own dedicated ADMIN_SETUP_TOKEN env var (set separately in
+  // Render) rather than reusing LINE_CHANNEL_SECRET, so this one-off admin
+  // action never needs anyone to read a live secret out of a secrets vault.
+  if (!process.env.ADMIN_SETUP_TOKEN || req.query.secret !== process.env.ADMIN_SETUP_TOKEN) {
     return res.status(403).send('Forbidden');
   }
   try {
