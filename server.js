@@ -1110,6 +1110,68 @@ app.get('/admin/richmenu/setup', async (req, res) => {
   }
 });
 
+// Read-only check: which rich menu is the live default right now, and what
+// rich menus exist on this channel. Safe to call anytime — no mutation.
+app.get('/admin/richmenu/status', async (req, res) => {
+  if (!process.env.ADMIN_SETUP_TOKEN || req.query.secret !== process.env.ADMIN_SETUP_TOKEN) {
+    return res.status(403).send('Forbidden');
+  }
+  try {
+    let defaultRichMenuId = null;
+    let defaultError = null;
+    try {
+      const defaultRes = await axios.get('https://api.line.me/v2/bot/user/all/richmenu', {
+        headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` },
+      });
+      defaultRichMenuId = defaultRes.data.richMenuId;
+    } catch (e) {
+      defaultError = e.response?.data || e.message;
+    }
+
+    const listRes = await axios.get('https://api.line.me/v2/bot/richmenu/list', {
+      headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` },
+    });
+
+    res.json({
+      ok: true,
+      defaultRichMenuId,
+      defaultError,
+      richMenus: listRes.data.richmenus.map(m => ({
+        richMenuId: m.richMenuId,
+        name: m.name,
+        chatBarText: m.chatBarText,
+        size: m.size,
+        isDefault: m.richMenuId === defaultRichMenuId,
+      })),
+    });
+  } catch (err) {
+    console.error('❌ richmenu status error:', err.response?.data || err.message);
+    res.status(500).json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
+// Deletes ONE rich menu by id (pass ?richMenuId=...). Use /admin/richmenu/status
+// first to see which ids exist and which one is currently default before
+// deleting anything.
+app.get('/admin/richmenu/delete', async (req, res) => {
+  if (!process.env.ADMIN_SETUP_TOKEN || req.query.secret !== process.env.ADMIN_SETUP_TOKEN) {
+    return res.status(403).send('Forbidden');
+  }
+  const { richMenuId } = req.query;
+  if (!richMenuId) {
+    return res.status(400).json({ ok: false, error: 'Missing ?richMenuId=' });
+  }
+  try {
+    await axios.delete(`https://api.line.me/v2/bot/richmenu/${richMenuId}`, {
+      headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` },
+    });
+    res.json({ ok: true, deleted: richMenuId });
+  } catch (err) {
+    console.error('❌ richmenu delete error:', err.response?.data || err.message);
+    res.status(500).json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
