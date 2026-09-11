@@ -189,6 +189,18 @@ const MAINTENANCE_CATEGORIES = {
   other: 'อื่น ๆ',
 };
 
+// LINE Quick Reply button `label` has a hard 20-character limit (the full
+// MAINTENANCE_CATEGORIES value above is used for displayText/DB storage,
+// where there's no such limit — only 'furniture' is long enough to need a
+// shortened button label here).
+const MAINTENANCE_CATEGORY_QR_LABELS = {
+  electric: 'ไฟฟ้า',
+  water: 'ประปา',
+  aircon: 'เครื่องปรับอากาศ',
+  furniture: 'เฟอร์นิเจอร์/ของใช้',
+  other: 'อื่น ๆ',
+};
+
 // ----------------------------------------------------------------------------
 // conversation_state — multi-step flow state, keyed ONLY by LINE userId
 // (never an in-process/global variable — that would leak one user's
@@ -539,7 +551,7 @@ async function finalizeSlipSubmission(userId, tenant, context, event) {
 async function handleMaintenanceMenu(userId) {
   await clearConversationState(userId);
   const items = Object.entries(MAINTENANCE_CATEGORIES).map(([key, label]) =>
-    qrPostback(label, `action=maintenance_category&category=${key}`, label)
+    qrPostback(MAINTENANCE_CATEGORY_QR_LABELS[key] || label, `action=maintenance_category&category=${key}`, label)
   );
   await replyText(userId, '🔧 แจ้งซ่อม\n\nกรุณาเลือกประเภทปัญหาที่พบครับ/ค่ะ', items);
 }
