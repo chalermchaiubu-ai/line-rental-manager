@@ -51,7 +51,7 @@ function verifyLineSignature(body, signature) {
 async function sendLineMessage(userId, messages) {
   try {
     await axios.post(
-      'https://api.line.biz/v3/bot/message/push',
+      'https://api.line.me/v2/bot/message/push',
       {
         to: userId,
         messages: Array.isArray(messages) ? messages : [messages],
