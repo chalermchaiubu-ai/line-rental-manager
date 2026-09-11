@@ -24,7 +24,7 @@ app.use(express.text({ type: 'application/json' }));
 
 // Then parse JSON manually and keep raw body
 app.use((req, res, next) => {
-  if (req.headers['content-type'] === 'application/json' && req.body) {
+    if (typeof req.body === 'string' && req.body.length > 0) {
     try {
       req.rawBody = req.body; // ✅ Store raw body for signature verification
       req.body = JSON.parse(req.body); // Parse JSON for message processing
