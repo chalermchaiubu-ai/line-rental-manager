@@ -343,6 +343,27 @@ async function handleReportRepair(userId, tenant, lease, description) {
   await replyText(userId, '✅ แจ้งซ่อมสำเร็จ เจ้าของ/ช่างจะตรวจสอบและติดต่อกลับเร็ว ๆ นี้ครับ/ค่ะ');
 }
  
+async function handleSubmitSlipPrompt(userId, tenant) {
+  const { data: bill } = await supabase
+    .from('bills')
+    .select('*')
+    .eq('tenant_id', tenant.id)
+    .in('status', ['unpaid', 'overdue', 'verifying'])
+    .order('billing_month', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+ 
+  if (!bill) {
+    await replyText(userId, '🎉 ไม่มีบิลค้างชำระในขณะนี้ครับ/ค่ะ ไม่ต้องส่งสลิปก็ได้');
+    return;
+  }
+ 
+  await replyText(
+    userId,
+    `📎 กรุณาส่ง "รูปภาพ" สลิปการโอนเงินมาที่แชทนี้ได้เลยครับ/ค่ะ\n\nบิล: ${bill.bill_number || bill.billing_month}\nยอดที่ต้องชำระ: ${formatBaht(bill.total_amount)} บาท`
+  );
+}
+ 
 async function handlePaymentHistory(userId, tenant) {
   const { data: payments } = await supabase
     .from('payments')
@@ -389,7 +410,7 @@ async function handleHelp(userId) {
     userId,
     '📋 คำสั่งที่ใช้ได้:\n\n' +
       '• เช็คบิล — ดูบิลค้างชำระล่าสุด\n' +
-      '• (ส่งรูปสลิป) — แจ้งชำระเงิน\n' +
+      '• แจ้งชำระเงิน — ส่งรูปสลิปการโอนเงิน\n' +
       '• แจ้งซ่อม <รายละเอียด> — แจ้งปัญหาในห้อง\n' +
       '• ประวัติการชำระเงิน — ดูประวัติการจ่าย 5 รายการล่าสุด\n' +
       '• ติดต่อเจ้าของ — ดูช่องทางติดต่อเจ้าของหอพัก\n' +
@@ -406,6 +427,7 @@ async function handleHelp(userId) {
 function matchIntent(text) {
   const t = text.trim();
   if (/^\/?(เช็คบิล|ดูบิล|เช็คยอด)/.test(t)) return 'check_bill';
+  if (/^\/?(แจ้งชำระเงิน|ส่งสลิป)/.test(t)) return 'submit_slip_prompt';
   if (/^\/?แจ้งซ่อม/.test(t)) return 'report_repair';
   if (/^\/?(ประวัติการชำระเงิน|ประวัติ)/.test(t)) return 'payment_history';
   if (/^\/?(ติดต่อเจ้าของ|ติดต่อ)/.test(t)) return 'contact_owner';
@@ -419,6 +441,8 @@ async function handleTextMessage(userId, tenant, lease, text) {
   switch (intent) {
     case 'check_bill':
       return handleCheckBill(userId, tenant, lease);
+    case 'submit_slip_prompt':
+      return handleSubmitSlipPrompt(userId, tenant);
     case 'report_repair': {
       const description = text.replace(/^\/?แจ้งซ่อม/, '').trim();
       return handleReportRepair(userId, tenant, lease, description);
