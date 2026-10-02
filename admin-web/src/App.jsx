@@ -12,7 +12,7 @@ import PaymentVerification from './pages/PaymentVerification';
 import Maintenance from './pages/Maintenance';
 import MoveOut from './pages/MoveOut';
 import Reports from './pages/Reports';
-import ComingSoon from './pages/ComingSoon';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -98,7 +98,7 @@ export default function App() {
               path="settings"
               element={
                 <RequirePermission permission="MANAGE_SETTINGS">
-                  <ComingSoon title="ตั้งค่า" />
+                  <Settings />
                 </RequirePermission>
               }
             />
