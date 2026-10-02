@@ -10,6 +10,7 @@ import MeterEntry from './pages/MeterEntry';
 import BillGeneration from './pages/BillGeneration';
 import PaymentVerification from './pages/PaymentVerification';
 import Maintenance from './pages/Maintenance';
+import MoveOut from './pages/MoveOut';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -80,7 +81,7 @@ export default function App() {
               path="move-out"
               element={
                 <RequirePermission permission="VIEW_ROOMS">
-                  <ComingSoon title="ย้ายออก" />
+                  <MoveOut />
                 </RequirePermission>
               }
             />
