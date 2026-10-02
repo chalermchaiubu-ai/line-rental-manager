@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Rooms from './pages/Rooms';
 import Tenants from './pages/Tenants';
 import MeterEntry from './pages/MeterEntry';
+import BillGeneration from './pages/BillGeneration';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -53,7 +54,7 @@ export default function App() {
               path="bills"
               element={
                 <RequirePermission permission="VIEW_ROOMS">
-                  <ComingSoon title="บิล" />
+                  <BillGeneration />
                 </RequirePermission>
               }
             />
