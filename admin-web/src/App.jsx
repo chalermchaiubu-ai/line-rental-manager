@@ -9,6 +9,7 @@ import Tenants from './pages/Tenants';
 import MeterEntry from './pages/MeterEntry';
 import BillGeneration from './pages/BillGeneration';
 import PaymentVerification from './pages/PaymentVerification';
+import Maintenance from './pages/Maintenance';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -71,7 +72,7 @@ export default function App() {
               path="maintenance"
               element={
                 <RequirePermission permission="HANDLE_MAINTENANCE">
-                  <ComingSoon title="งานซ่อม" />
+                  <Maintenance />
                 </RequirePermission>
               }
             />
