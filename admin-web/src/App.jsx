@@ -4,6 +4,8 @@ import { RequireAuth, RequirePermission } from './auth/RequireAuth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Rooms from './pages/Rooms';
+import Tenants from './pages/Tenants';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -26,7 +28,7 @@ export default function App() {
               path="rooms"
               element={
                 <RequirePermission permission="VIEW_ROOMS">
-                  <ComingSoon title="ห้องพัก" />
+                  <Rooms />
                 </RequirePermission>
               }
             />
@@ -34,7 +36,7 @@ export default function App() {
               path="tenants"
               element={
                 <RequirePermission permission="VIEW_ROOMS">
-                  <ComingSoon title="ผู้เช่า / สัญญา" />
+                  <Tenants />
                 </RequirePermission>
               }
             />
