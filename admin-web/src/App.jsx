@@ -8,6 +8,7 @@ import Rooms from './pages/Rooms';
 import Tenants from './pages/Tenants';
 import MeterEntry from './pages/MeterEntry';
 import BillGeneration from './pages/BillGeneration';
+import PaymentVerification from './pages/PaymentVerification';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -62,7 +63,7 @@ export default function App() {
               path="payments"
               element={
                 <RequirePermission permission="VIEW_ROOMS">
-                  <ComingSoon title="การชำระเงิน" />
+                  <PaymentVerification />
                 </RequirePermission>
               }
             />
