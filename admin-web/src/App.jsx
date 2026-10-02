@@ -11,6 +11,7 @@ import BillGeneration from './pages/BillGeneration';
 import PaymentVerification from './pages/PaymentVerification';
 import Maintenance from './pages/Maintenance';
 import MoveOut from './pages/MoveOut';
+import Reports from './pages/Reports';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -89,7 +90,7 @@ export default function App() {
               path="reports"
               element={
                 <RequirePermission permission="MANAGE_ROOMS">
-                  <ComingSoon title="รายงาน" />
+                  <Reports />
                 </RequirePermission>
               }
             />
