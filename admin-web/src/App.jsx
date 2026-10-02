@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Rooms from './pages/Rooms';
 import Tenants from './pages/Tenants';
+import MeterEntry from './pages/MeterEntry';
 import ComingSoon from './pages/ComingSoon';
 
 export default function App() {
@@ -44,7 +45,7 @@ export default function App() {
               path="meters"
               element={
                 <RequirePermission permission="ENTER_METER">
-                  <ComingSoon title="มิเตอร์" />
+                  <MeterEntry />
                 </RequirePermission>
               }
             />
