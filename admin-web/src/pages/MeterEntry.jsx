@@ -135,17 +135,46 @@ export default function MeterEntry() {
       return false;
     }
 
+    const fail = (msg) => {
+      setRows((prev) => prev.map((r) => (r.roomId === row.roomId ? { ...r, saveState: 'error', saveError: msg } : r)));
+      return false;
+    };
+    const electricPrevious = toNum(row.electricPrevious);
+    const waterPrevious = toNum(row.waterPrevious);
+    // A current reading with no previous one used to save previous = 0, so the
+    // whole meter value became "units used" (a huge bill). Require it.
+    if (electricCurrent !== null && electricPrevious === null) {
+      return fail('ไม่มีเลขไฟก่อนหน้า — กรอกเลขเดือนที่แล้ว (ถ้าเพิ่งเริ่มใช้ ให้ใส่เท่ากับเลขปัจจุบัน)');
+    }
+    if (waterCurrent !== null && waterPrevious === null) {
+      return fail('ไม่มีเลขน้ำก่อนหน้า — กรอกเลขเดือนที่แล้ว (ถ้าเพิ่งเริ่มใช้ ให้ใส่เท่ากับเลขปัจจุบัน)');
+    }
+    if (electricCurrent !== null && electricCurrent < electricPrevious) {
+      return fail('เลขไฟปัจจุบันน้อยกว่าเลขก่อนหน้า — ตรวจเลขอีกครั้ง (มิเตอร์เปลี่ยน/วนรอบ: ใส่ก่อนหน้า = ปัจจุบัน แล้วพิมพ์หน่วยเอง)');
+    }
+    if (waterCurrent !== null && waterCurrent < waterPrevious) {
+      return fail('เลขน้ำปัจจุบันน้อยกว่าเลขก่อนหน้า — ตรวจเลขอีกครั้ง (มิเตอร์เปลี่ยน/วนรอบ: ใส่ก่อนหน้า = ปัจจุบัน แล้วพิมพ์หน่วยเอง)');
+    }
+    const eUnits = toNum(row.electricUnits);
+    const wUnits = toNum(row.waterUnits);
+    if ((eUnits !== null && eUnits < 0) || (wUnits !== null && wUnits < 0)) {
+      return fail('จำนวนหน่วยติดลบ — ตรวจเลขอีกครั้ง');
+    }
+
     setRows((prev) => prev.map((r) => (r.roomId === row.roomId ? { ...r, saveState: 'saving', saveError: null } : r)));
 
+    // If only one of electric/water was filled, the other used to save
+    // current = 0 (fails the DB's previous<=current check, or bills a wrong
+    // amount). Keep the unfilled side at "no usage": current = previous, 0 units.
     const payload = {
       room_id: row.roomId,
       billing_month: billingMonth,
-      electric_previous: toNum(row.electricPrevious) ?? 0,
-      electric_current: electricCurrent ?? 0,
-      electric_units: toNum(row.electricUnits) ?? 0,
-      water_previous: toNum(row.waterPrevious) ?? 0,
-      water_current: waterCurrent ?? 0,
-      water_units: toNum(row.waterUnits) ?? 0,
+      electric_previous: electricPrevious ?? 0,
+      electric_current: electricCurrent ?? electricPrevious ?? 0,
+      electric_units: electricCurrent === null ? 0 : eUnits ?? 0,
+      water_previous: waterPrevious ?? 0,
+      water_current: waterCurrent ?? waterPrevious ?? 0,
+      water_units: waterCurrent === null ? 0 : wUnits ?? 0,
       recorded_by: staff?.id || null,
       recorded_at: new Date().toISOString(),
     };
