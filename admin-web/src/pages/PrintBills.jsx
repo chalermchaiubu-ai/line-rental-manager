@@ -260,7 +260,15 @@ function Bill({ b, set }) {
 const draftKey = (ym) => `printBillsDraft:${ym}`;
 function loadDraft(ym) {
   try {
-    return JSON.parse(window.localStorage.getItem(draftKey(ym)) || '{}') || {};
+    const raw = JSON.parse(window.localStorage.getItem(draftKey(ym)) || '{}') || {};
+    // Month/date are shared by all bills (owner: same for every room), so any
+    // per-bill override saved by an older version is dropped.
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const { month: _m, date: _d, ...rest } = v || {};
+      out[k] = rest;
+    }
+    return out;
   } catch {
     return {};
   }
@@ -289,6 +297,8 @@ export default function PrintBills() {
   useEffect(() => {
     setEdits(loadDraft(billingMonth));
     setBillMonthYm(prevMonth(billingMonth));
+    setSharedMonthText(null);
+    setSharedDateText(null);
     setBillDate(lastDayOf(prevMonth(billingMonth)));
   }, [billingMonth]);
 
@@ -306,7 +316,13 @@ export default function PrintBills() {
     });
   }
 
+  // Free-text override of month/date typed on ANY bill — applies to all bills.
+  const [sharedMonthText, setSharedMonthText] = useState(null);
+  const [sharedDateText, setSharedDateText] = useState(null);
+
   function setField(roomId, field, value) {
+    if (field === 'month') return setSharedMonthText(value);
+    if (field === 'date') return setSharedDateText(value);
     setEdits((prev) => {
       const cur = { ...(prev[roomId] || {}), [field]: value };
       // Changing a meter reading re-computes units unless units were typed by hand.
@@ -424,8 +440,8 @@ export default function PrintBills() {
           const base = {
             ...b,
             tenantName: showNames ? b.tenantName : '',
-            month: monthLabel,
-            date: dateLabel,
+            month: sharedMonthText ?? monthLabel,
+            date: sharedDateText ?? dateLabel,
             eCur: b.eCur ?? '',
             ePrev: b.ePrev ?? '',
             eUnits: showNum(b.eUnits),
@@ -435,7 +451,7 @@ export default function PrintBills() {
           };
           return { ...base, ...(edits[b.roomId] || {}) };
         }),
-    [bills, includeOtherUnits, showNames, edits, monthLabel, dateLabel]
+    [bills, includeOtherUnits, showNames, edits, monthLabel, dateLabel, sharedMonthText, sharedDateText]
   );
   const editedCount = Object.keys(edits).filter((k) => Object.keys(edits[k] || {}).length).length;
   const missingMeter = shown.filter((b) => !b.hasMeter).map((b) => b.roomNumber);
@@ -492,6 +508,8 @@ export default function PrintBills() {
               onChange={(e) => {
                 setBillMonthYm(e.target.value);
                 if (e.target.value) setBillDate(lastDayOf(e.target.value));
+                setSharedMonthText(null);
+                setSharedDateText(null);
                 applyToAll('month');
                 applyToAll('date');
               }}
@@ -505,6 +523,7 @@ export default function PrintBills() {
               value={billDate}
               onChange={(e) => {
                 setBillDate(e.target.value);
+                setSharedDateText(null);
                 applyToAll('date');
               }}
               className="ml-1 rounded-md border border-sky-400 px-2 py-1"
