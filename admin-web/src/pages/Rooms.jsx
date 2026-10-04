@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../auth/permissions';
 import { sortRooms } from '../lib/sortRooms';
+import LeaseEditor from '../components/LeaseEditor';
 
 const STATUS_LABEL = {
   vacant: 'ว่าง',
@@ -23,6 +24,12 @@ const STATUS_BADGE = {
 export default function Rooms() {
   const { staff } = useAuth();
   const canSeeRent = can(staff?.role, 'VIEW_RENT_PRICING');
+  const canEditTenant = can(staff?.role, 'MANAGE_TENANTS');
+  const canManageLease = can(staff?.role, 'MANAGE_LEASES');
+  const canEditPricing = canSeeRent && canManageLease;
+  const [editing, setEditing] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -42,7 +49,10 @@ export default function Rooms() {
         const [roomsRes, roomTypesRes, leasesRes] = await Promise.all([
           supabase.from('rooms').select('id, room_number, room_type_id, status, floor, note').order('room_number'),
           supabase.from('room_types').select('id, name, default_rent'),
-          supabase.from('leases').select('id, room_id, tenant_id, monthly_rent').eq('status', 'active'),
+          supabase
+            .from('leases')
+            .select('id, room_id, tenant_id, monthly_rent, deposit, electric_rate, water_rate, start_date')
+            .eq('status', 'active'),
         ]);
         if (roomsRes.error) throw roomsRes.error;
         if (roomTypesRes.error) throw roomTypesRes.error;
@@ -55,7 +65,7 @@ export default function Rooms() {
         if (tenantIds.length > 0) {
           const tenantsRes = await supabase
             .from('tenants')
-            .select('id, first_name, last_name')
+            .select('id, first_name, last_name, phone')
             .in('id', tenantIds);
           if (tenantsRes.error) throw tenantsRes.error;
           tenantsById = new Map((tenantsRes.data || []).map((t) => [t.id, t]));
@@ -71,7 +81,14 @@ export default function Rooms() {
             ...room,
             roomTypeName: roomType?.name || '-',
             rent: lease?.monthly_rent ?? roomType?.default_rent ?? null,
+            defaultRent: roomType?.default_rent ?? null,
+            lease,
+            tenant: tenant || null,
             tenantName: tenant ? `${tenant.first_name || ''} ${tenant.last_name || ''}`.trim() : null,
+            // Generate Bill refuses leases with no electric/water rate; flag them.
+            notBillable:
+              Boolean(lease) &&
+              (lease.electric_rate == null || lease.water_rate == null || !Number(lease.monthly_rent)),
           };
         });
 
@@ -87,7 +104,10 @@ export default function Rooms() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
+
+  const notBillableCount = rows.filter((r) => r.notBillable).length;
+  const showActions = canEditTenant || canManageLease;
 
   return (
     <div>
@@ -101,6 +121,28 @@ export default function Rooms() {
           {error}
         </div>
       )}
+      {msg && (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{msg}</div>
+      )}
+      {canEditPricing && !loading && notBillableCount > 0 && (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          มี {notBillableCount} ห้องที่ยังออกบิลไม่ได้ (ยังไม่ตั้งค่าเช่า หรือเรทค่าน้ำ/ไฟ) — กด "แก้ไข" ที่ห้องที่มีป้าย "ยังไม่ตั้งเรท"
+        </div>
+      )}
+
+      {editing && (
+        <LeaseEditor
+          room={editing}
+          canEditPricing={canEditPricing}
+          canEditTenant={canEditTenant || !editing.lease}
+          onClose={() => setEditing(null)}
+          onSaved={(text) => {
+            setEditing(null);
+            setMsg(text);
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      )}
 
       <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
         <table className="w-full text-left text-sm">
@@ -111,18 +153,19 @@ export default function Rooms() {
               <th className="px-4 py-3">ผู้เช่าปัจจุบัน</th>
               {canSeeRent && <th className="px-4 py-3">ค่าเช่า/เดือน</th>}
               <th className="px-4 py-3">สถานะ</th>
+              {showActions && <th className="px-4 py-3"></th>}
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={canSeeRent ? 5 : 4} className="px-4 py-6 text-center text-slate-400">
+                <td colSpan={(canSeeRent ? 5 : 4) + (showActions ? 1 : 0)} className="px-4 py-6 text-center text-slate-400">
                   กำลังโหลด…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={canSeeRent ? 5 : 4} className="px-4 py-6 text-center text-slate-400">
+                <td colSpan={(canSeeRent ? 5 : 4) + (showActions ? 1 : 0)} className="px-4 py-6 text-center text-slate-400">
                   ยังไม่มีข้อมูลห้องพัก
                 </td>
               </tr>
@@ -135,6 +178,11 @@ export default function Rooms() {
                   {canSeeRent && (
                     <td className="px-4 py-3 text-slate-600">
                       {room.rent != null ? `${Number(room.rent).toLocaleString('th-TH')} บาท` : '-'}
+                      {room.notBillable && (
+                        <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                          ยังไม่ตั้งเรท
+                        </span>
+                      )}
                     </td>
                   )}
                   <td className="px-4 py-3">
@@ -146,6 +194,33 @@ export default function Rooms() {
                       {STATUS_LABEL[room.status] || room.status || 'ไม่ระบุ'}
                     </span>
                   </td>
+                  {showActions && (
+                    <td className="px-4 py-3 text-right">
+                      {room.lease ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMsg(null);
+                            setEditing(room);
+                          }}
+                          className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                        >
+                          แก้ไข
+                        </button>
+                      ) : canManageLease && room.status !== 'occupied' ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMsg(null);
+                            setEditing(room);
+                          }}
+                          className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-700"
+                        >
+                          + เพิ่มผู้เช่า
+                        </button>
+                      ) : null}
+                    </td>
+                  )}
                 </tr>
               ))
             )}
