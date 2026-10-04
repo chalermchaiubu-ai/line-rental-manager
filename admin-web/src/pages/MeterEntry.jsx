@@ -10,6 +10,12 @@ import { sortRooms } from '../lib/sortRooms';
 // the DB's previous<=current check) and then type the real units by hand.
 const BROKEN_METER_ROOMS = new Set(['2', '24']);
 
+// Only a visual warning (never blocks saving): a typical room uses far less
+// than this in a month, so a bigger number usually means decimal digits on the
+// meter were typed in as whole units.
+const HIGH_WATER_UNITS = 100;
+const HIGH_ELECTRIC_UNITS = 1500;
+
 function currentBillingMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -163,13 +169,13 @@ export default function MeterEntry() {
     if (electricCurrent !== null && electricCurrent < electricPrevious) {
       return fail('เลขไฟปัจจุบันน้อยกว่าเลขก่อนหน้า — ตรวจเลขอีกครั้ง (มิเตอร์เปลี่ยน/วนรอบ: ใส่ก่อนหน้า = ปัจจุบัน แล้วพิมพ์หน่วยเอง)');
     }
-    if (waterCurrent !== null && waterCurrent < waterPrevious) {
-      return fail('เลขน้ำปัจจุบันน้อยกว่าเลขก่อนหน้า — ตรวจเลขอีกครั้ง (มิเตอร์เปลี่ยน/วนรอบ: ใส่ก่อนหน้า = ปัจจุบัน แล้วพิมพ์หน่วยเอง)');
-    }
     const eUnits = toNum(row.electricUnits);
     const wUnits = toNum(row.waterUnits);
-    if ((eUnits !== null && eUnits < 0) || (wUnits !== null && wUnits < 0)) {
-      return fail('จำนวนหน่วยติดลบ — ตรวจเลขอีกครั้ง');
+    if (eUnits !== null && eUnits < 0) {
+      return fail('หน่วยไฟติดลบ — ตรวจเลข หรือพิมพ์จำนวนหน่วยที่ต้องการคิดในช่องหน่วยไฟ');
+    }
+    if (wUnits !== null && wUnits < 0) {
+      return fail('หน่วยน้ำติดลบ — พิมพ์จำนวนหน่วยน้ำที่ต้องการคิดในช่องหน่วยน้ำ');
     }
 
     setRows((prev) => prev.map((r) => (r.roomId === row.roomId ? { ...r, saveState: 'saving', saveError: null } : r)));
@@ -199,10 +205,14 @@ export default function MeterEntry() {
       .single();
 
     if (upsertError) {
+      const m = upsertError.message || '';
+      const msg = /type integer|invalid input syntax/i.test(m)
+        ? 'ระบบรับเฉพาะจำนวนเต็ม — กรุณาปัดเศษหน่วย/เลขมิเตอร์ให้เป็นจำนวนเต็มก่อนบันทึก'
+        : /check constraint/i.test(m)
+          ? 'เลขก่อนหน้ามากกว่าเลขปัจจุบัน — พิมพ์จำนวนหน่วยที่ต้องการคิดในช่องหน่วยแทน'
+          : m;
       setRows((prev) =>
-        prev.map((r) =>
-          r.roomId === row.roomId ? { ...r, saveState: 'error', saveError: upsertError.message } : r
-        )
+        prev.map((r) => (r.roomId === row.roomId ? { ...r, saveState: 'error', saveError: msg } : r))
       );
       return false;
     }
@@ -259,9 +269,9 @@ export default function MeterEntry() {
       </div>
 
       <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        ห้อง/หน่วยที่มิเตอร์น้ำชำรุด (เช่น ห้อง 2, 24): ใส่ "เลขปัจจุบัน" ก่อน แล้วพิมพ์จำนวน "หน่วยน้ำ"
-        ที่ต้องการคิดบิลในช่องหน่วยได้เลย — ระบบจะปรับ "เลขก่อนหน้า" ให้อัตโนมัติ (ก่อนหน้า = ปัจจุบัน − หน่วย)
-        เพื่อให้บิลคิดตามจำนวนหน่วยที่คุณพิมพ์
+        <b>บิลคิดตามตัวเลขในช่อง "หน่วย" เสมอ</b> — ทุกห้องแก้จำนวนหน่วยเองได้ (เพิ่ม/ลด/ปัดทศนิยม) โดยใส่
+        "เลขปัจจุบัน" ก่อน แล้วพิมพ์จำนวนหน่วยที่ต้องการคิดในช่องหน่วย ระบบจะปรับ "เลขก่อนหน้า" ให้เอง
+        (ก่อนหน้า = ปัจจุบัน − หน่วย) · ช่องหน่วยสีเหลือง = หน่วยสูงผิดปกติ ตรวจก่อนบันทึก
       </div>
 
       {bannerMsg && (
@@ -315,6 +325,7 @@ export default function MeterEntry() {
                     <td className="px-2 py-2">
                       <input
                         type="number"
+                        step="any"
                         value={row.electricPrevious}
                         onChange={(e) => updateRow(row.roomId, { electricPrevious: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -323,6 +334,7 @@ export default function MeterEntry() {
                     <td className="px-2 py-2">
                       <input
                         type="number"
+                        step="any"
                         value={row.electricCurrent}
                         onChange={(e) => updateRow(row.roomId, { electricCurrent: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -331,14 +343,18 @@ export default function MeterEntry() {
                     <td className="px-2 py-2">
                       <input
                         type="number"
+                        step="any"
                         value={row.electricUnits}
                         onChange={(e) => updateRow(row.roomId, { electricUnits: e.target.value })}
-                        className="w-20 rounded-md border border-slate-300 px-2 py-1 font-semibold"
+                        className={`w-24 rounded-md border px-2 py-1 font-semibold ${
+                          toNum(row.electricUnits) > HIGH_ELECTRIC_UNITS ? 'border-amber-400 bg-amber-50' : 'border-slate-300'
+                        }`}
                       />
                     </td>
                     <td className="px-2 py-2">
                       <input
                         type="number"
+                        step="any"
                         value={row.waterPrevious}
                         onChange={(e) => updateRow(row.roomId, { waterPrevious: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -347,6 +363,7 @@ export default function MeterEntry() {
                     <td className="px-2 py-2">
                       <input
                         type="number"
+                        step="any"
                         value={row.waterCurrent}
                         onChange={(e) => updateRow(row.roomId, { waterCurrent: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -355,10 +372,16 @@ export default function MeterEntry() {
                     <td className="px-2 py-2">
                       <input
                         type="number"
+                        step="any"
                         value={row.waterUnits}
                         onChange={(e) => updateRow(row.roomId, { waterUnits: e.target.value })}
-                        className="w-20 rounded-md border border-slate-300 px-2 py-1 font-semibold"
+                        className={`w-24 rounded-md border px-2 py-1 font-semibold ${
+                          toNum(row.waterUnits) > HIGH_WATER_UNITS ? 'border-amber-400 bg-amber-50' : 'border-slate-300'
+                        }`}
                       />
+                      {toNum(row.waterUnits) > HIGH_WATER_UNITS && (
+                        <p className="mt-0.5 max-w-[110px] text-[10px] leading-tight text-amber-700">สูงผิดปกติ — มีทศนิยมไหม?</p>
+                      )}
                     </td>
                     <td className="px-4 py-2">
                       <button
