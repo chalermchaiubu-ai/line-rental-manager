@@ -47,17 +47,49 @@ function roomKind(typeName) {
   return null;
 }
 
-function Box({ checked }) {
+function Box({ checked, onToggle }) {
   return (
-    <span className="mx-0.5 inline-flex h-[12px] w-[12px] items-center justify-center border border-slate-500 align-[-2px] text-[10px] leading-none">
+    <button
+      type="button"
+      onClick={onToggle}
+      className="mx-0.5 inline-flex h-[13px] w-[13px] cursor-pointer items-center justify-center border border-slate-500 align-[-2px] text-[10px] leading-none hover:bg-amber-100 print:hover:bg-transparent"
+      title="คลิกเพื่อติ๊ก/เอาออก"
+    >
       {checked ? '✓' : ''}
-    </span>
+    </button>
   );
 }
 
-function Bill({ b, monthLabel, dateLabel }) {
-  const cell = 'border border-slate-300 px-2 py-[3px]';
+// Text field that looks like plain text on paper; light yellow while hovering /
+// editing on screen so it's obvious every value can be changed before printing.
+function F({ value, onChange, className = '', align = 'left', placeholder = '' }) {
+  return (
+    <input
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={`bill-input w-full bg-transparent outline-none hover:bg-amber-50 focus:bg-amber-100 print:placeholder-transparent ${
+        align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : ''
+      } ${className}`}
+    />
+  );
+}
+
+const toNumber = (v) => {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const x = Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(x) ? x : null;
+};
+const money = (x) => (x === null ? '' : x.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
+function Bill({ b, set }) {
+  const cell = 'border border-slate-300 px-1.5 py-[2px]';
   const num = `${cell} text-center tabular-nums`;
+  const amounts = ['amtRent', 'amtElec', 'amtWater', 'amtFine', 'amtOther'].map((k) => toNumber(b[k]));
+  const anyAmount = amounts.some((x) => x !== null);
+  const autoTotal = anyAmount ? amounts.reduce((a, x) => a + (x ?? 0), 0) : null;
+  const totalShown = b.total !== undefined && b.total !== '' ? b.total : money(autoTotal);
+
   return (
     <div className="bill flex h-full flex-col rounded-lg border border-slate-300 px-4 py-3">
       <div className="flex items-start justify-between">
@@ -72,29 +104,38 @@ function Bill({ b, monthLabel, dateLabel }) {
           <p className="inline-block rounded-md bg-sky-600 px-3 py-1 text-[13px] font-bold text-white">
             ใบแจ้งหนี้ / ใบเสร็จรับเงิน
           </p>
-          <p className="mt-1 text-[10.5px]">
-            <b>ประจำเดือน:</b> <span className="inline-block min-w-[110px] border-b border-dotted border-slate-400 text-center">{monthLabel}</span>
+          <p className="mt-1 flex items-center justify-end gap-1 text-[10.5px]">
+            <b>ประจำเดือน:</b>
+            <span className="inline-block w-[115px] border-b border-dotted border-slate-400">
+              <F value={b.month} onChange={(v) => set('month', v)} align="center" />
+            </span>
           </p>
-          <p className="text-[10.5px]">
-            <b>วันที่:</b> <span className="inline-block min-w-[110px] border-b border-dotted border-slate-400 text-center">{dateLabel}</span>
+          <p className="flex items-center justify-end gap-1 text-[10.5px]">
+            <b>วันที่:</b>
+            <span className="inline-block w-[115px] border-b border-dotted border-slate-400">
+              <F value={b.date} onChange={(v) => set('date', v)} align="center" />
+            </span>
           </p>
         </div>
       </div>
       <div className="mt-1.5 border-t-2 border-sky-600" />
 
-      <div className="mt-2 flex items-center justify-between rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px]">
-        <span>
-          <b>ชื่อผู้เช่า:</b>{' '}
-          <span className="inline-block min-w-[170px] border-b border-dotted border-slate-400 px-1">{b.tenantName}</span>
-        </span>
-        <span>
-          <b>ห้องเลขที่:</b>{' '}
-          <span className="inline-block min-w-[110px] border-b border-dotted border-slate-400 px-1 text-center font-semibold">
-            {b.roomNumber}
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px]">
+        <span className="flex flex-1 items-center gap-1">
+          <b className="whitespace-nowrap">ชื่อผู้เช่า:</b>
+          <span className="flex-1 border-b border-dotted border-slate-400">
+            <F value={b.tenantName} onChange={(v) => set('tenantName', v)} />
           </span>
         </span>
-        <span>
-          <b>ประเภท:</b> <Box checked={b.kind === 'air'} /> แอร์ <Box checked={b.kind === 'fan'} /> พัดลม
+        <span className="flex items-center gap-1">
+          <b className="whitespace-nowrap">ห้องเลขที่:</b>
+          <span className="w-[100px] border-b border-dotted border-slate-400 font-semibold">
+            <F value={b.roomNumber} onChange={(v) => set('roomNumber', v)} align="center" />
+          </span>
+        </span>
+        <span className="whitespace-nowrap">
+          <b>ประเภท:</b> <Box checked={b.kind === 'air'} onToggle={() => set('kind', b.kind === 'air' ? null : 'air')} /> แอร์{' '}
+          <Box checked={b.kind === 'fan'} onToggle={() => set('kind', b.kind === 'fan' ? null : 'fan')} /> พัดลม
         </span>
       </div>
 
@@ -117,41 +158,55 @@ function Bill({ b, monthLabel, dateLabel }) {
             <td className={num}>-</td>
             <td className={num}>-</td>
             <td className={num}>-</td>
-            <td className={cell} />
+            <td className={cell}><F value={b.amtRent} onChange={(v) => set('amtRent', v)} align="right" /></td>
           </tr>
           <tr>
             <td className={cell}>2. ค่าไฟฟ้า (Electricity)</td>
-            <td className={num}>{showNum(b.eCur)}</td>
-            <td className={num}>{showNum(b.ePrev)}</td>
-            <td className={`${num} font-semibold`}>{showNum(b.eUnits)}</td>
-            <td className={cell} />
+            <td className={num}><F value={b.eCur} onChange={(v) => set('eCur', v)} align="center" /></td>
+            <td className={num}><F value={b.ePrev} onChange={(v) => set('ePrev', v)} align="center" /></td>
+            <td className={num}><F value={b.eUnits} onChange={(v) => set('eUnits', v)} align="center" className="font-semibold" /></td>
+            <td className={cell}><F value={b.amtElec} onChange={(v) => set('amtElec', v)} align="right" /></td>
           </tr>
           <tr>
             <td className={cell}>3. ค่าน้ำประปา (Water)</td>
-            <td className={num}>{showNum(b.wCur)}</td>
-            <td className={num}>{showNum(b.wPrev)}</td>
-            <td className={`${num} font-semibold`}>{showNum(b.wUnits)}</td>
-            <td className={cell} />
+            <td className={num}><F value={b.wCur} onChange={(v) => set('wCur', v)} align="center" /></td>
+            <td className={num}><F value={b.wPrev} onChange={(v) => set('wPrev', v)} align="center" /></td>
+            <td className={num}><F value={b.wUnits} onChange={(v) => set('wUnits', v)} align="center" className="font-semibold" /></td>
+            <td className={cell}><F value={b.amtWater} onChange={(v) => set('amtWater', v)} align="right" /></td>
           </tr>
           <tr>
             <td className={cell}>4. ค่าปรับเกินกำหนดชำระ (Fine)</td>
             <td className={`${cell} text-center`} colSpan={3}>
-              จำนวน ................... วัน (วันละ ........ บาท)
+              <span className="inline-flex items-center gap-1">
+                จำนวน
+                <span className="inline-block w-[60px] border-b border-dotted border-slate-400">
+                  <F value={b.fineDays} onChange={(v) => set('fineDays', v)} align="center" />
+                </span>
+                วัน (วันละ
+                <span className="inline-block w-[40px] border-b border-dotted border-slate-400">
+                  <F value={b.fineRate} onChange={(v) => set('fineRate', v)} align="center" />
+                </span>
+                บาท)
+              </span>
             </td>
-            <td className={cell} />
+            <td className={cell}><F value={b.amtFine} onChange={(v) => set('amtFine', v)} align="right" /></td>
           </tr>
           <tr>
             <td className={cell}>5. อื่นๆ (Other)</td>
             <td className={`${cell} text-center`} colSpan={3}>
-              ...........................................................................
+              <span className="block border-b border-dotted border-slate-400">
+                <F value={b.otherDesc} onChange={(v) => set('otherDesc', v)} align="center" />
+              </span>
             </td>
-            <td className={cell} />
+            <td className={cell}><F value={b.amtOther} onChange={(v) => set('amtOther', v)} align="right" /></td>
           </tr>
           <tr>
             <td className={`${cell} text-right font-bold`} colSpan={4}>
               รวมเงินทั้งสิ้น (Total Amount)
             </td>
-            <td className={`${cell} bg-emerald-50`} />
+            <td className={`${cell} bg-emerald-50 font-bold`}>
+              <F value={totalShown} onChange={(v) => set('total', v)} align="right" />
+            </td>
           </tr>
         </tbody>
       </table>
@@ -177,6 +232,25 @@ function Bill({ b, monthLabel, dateLabel }) {
   );
 }
 
+// Per-month edits are kept in this browser only (they never touch the
+// database), so a refresh doesn't lose work. Wrapped in try/catch because
+// storage can be unavailable (private mode etc.).
+const draftKey = (ym) => `printBillsDraft:${ym}`;
+function loadDraft(ym) {
+  try {
+    return JSON.parse(window.localStorage.getItem(draftKey(ym)) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+function saveDraft(ym, edits) {
+  try {
+    window.localStorage.setItem(draftKey(ym), JSON.stringify(edits));
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function PrintBills() {
   const [billingMonth, setBillingMonth] = useState(currentBillingMonth());
   const [billDate, setBillDate] = useState(todayStr());
@@ -186,6 +260,41 @@ export default function PrintBills() {
   const [error, setError] = useState(null);
   const [bills, setBills] = useState([]);
   const [placeholderName, setPlaceholderName] = useState(null);
+  const [edits, setEdits] = useState(() => loadDraft(currentBillingMonth()));
+
+  useEffect(() => {
+    setEdits(loadDraft(billingMonth));
+  }, [billingMonth]);
+
+  function setField(roomId, field, value) {
+    setEdits((prev) => {
+      const cur = { ...(prev[roomId] || {}), [field]: value };
+      // Changing a meter reading re-computes units unless units were typed by hand.
+      const base = bills.find((x) => x.roomId === roomId) || {};
+      const pick = (k) => (k in cur ? cur[k] : base[k]);
+      if ((field === 'eCur' || field === 'ePrev') && !cur.eUnitsManual) {
+        const c = toNumber(pick('eCur'));
+        const p = toNumber(pick('ePrev'));
+        if (c !== null && p !== null) cur.eUnits = showNum(c - p);
+      }
+      if ((field === 'wCur' || field === 'wPrev') && !cur.wUnitsManual) {
+        const c = toNumber(pick('wCur'));
+        const p = toNumber(pick('wPrev'));
+        if (c !== null && p !== null) cur.wUnits = showNum(c - p);
+      }
+      if (field === 'eUnits') cur.eUnitsManual = true;
+      if (field === 'wUnits') cur.wUnitsManual = true;
+      const next = { ...prev, [roomId]: cur };
+      saveDraft(billingMonth, next);
+      return next;
+    });
+  }
+
+  function clearEdits() {
+    if (!window.confirm('ล้างการแก้ไขทั้งหมดของเดือนนี้ และกลับไปใช้ข้อมูลจากระบบ?')) return;
+    setEdits({});
+    saveDraft(billingMonth, {});
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -263,21 +372,36 @@ export default function PrintBills() {
     };
   }, [billingMonth]);
 
+  const monthLabel = thaiMonth(billingMonth);
+  const dateLabel = thaiDate(billDate);
+
   const shown = useMemo(
     () =>
       bills
         .filter((b) => includeOtherUnits || b.isNumbered)
-        .map((b) => (showNames ? b : { ...b, tenantName: '' })),
-    [bills, includeOtherUnits, showNames]
+        .map((b) => {
+          const base = {
+            ...b,
+            tenantName: showNames ? b.tenantName : '',
+            month: monthLabel,
+            date: dateLabel,
+            eCur: showNum(b.eCur),
+            ePrev: showNum(b.ePrev),
+            eUnits: showNum(b.eUnits),
+            wCur: showNum(b.wCur),
+            wPrev: showNum(b.wPrev),
+            wUnits: showNum(b.wUnits),
+          };
+          return { ...base, ...(edits[b.roomId] || {}) };
+        }),
+    [bills, includeOtherUnits, showNames, edits, monthLabel, dateLabel]
   );
+  const editedCount = Object.keys(edits).filter((k) => Object.keys(edits[k] || {}).length).length;
   const missingMeter = shown.filter((b) => !b.hasMeter).map((b) => b.roomNumber);
 
   // pair bills two per A4 sheet
   const sheets = [];
   for (let i = 0; i < shown.length; i += 2) sheets.push(shown.slice(i, i + 2));
-
-  const monthLabel = thaiMonth(billingMonth);
-  const dateLabel = thaiDate(billDate);
 
   return (
     <div>
@@ -329,6 +453,11 @@ export default function PrintBills() {
           <label className="inline-flex items-center gap-1.5">
             <input type="checkbox" checked={includeOtherUnits} onChange={(e) => setIncludeOtherUnits(e.target.checked)} /> รวมบ้าน/โกดังด้วย
           </label>
+          {editedCount > 0 && (
+            <button type="button" onClick={clearEdits} className="ml-auto rounded-md border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-50">
+              ล้างการแก้ไข ({editedCount} บิล)
+            </button>
+          )}
         </div>
 
         {error && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
@@ -342,7 +471,11 @@ export default function PrintBills() {
             ยังไม่กรอกมิเตอร์เดือนนี้ {missingMeter.length} ห้อง: {missingMeter.join(', ')} — บิลห้องเหล่านี้ช่องมิเตอร์จะว่าง
           </div>
         )}
-        <p className="mt-3 text-xs text-slate-400">ตัวอย่างก่อนพิมพ์ ↓ (เวลาพิมพ์ ตั้งกระดาษ A4 แนวตั้ง, Margins: Default, เปิด "Background graphics")</p>
+        <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+          ✏️ <b>คลิกที่ช่องใดก็ได้ในบิลเพื่อแก้ไข</b> (ช่องจะเป็นสีเหลืองตอนแก้) · คลิกกล่อง ☐ แอร์ / ☐ พัดลม เพื่อติ๊กเอง ·
+          ใส่จำนวนเงินแล้วช่องรวมเงินบวกให้อัตโนมัติ · การแก้ไขเก็บไว้ในเครื่องนี้ ไม่กระทบข้อมูลในระบบ
+        </div>
+        <p className="mt-2 text-xs text-slate-400">ตัวอย่างก่อนพิมพ์ ↓ (เวลาพิมพ์ ตั้งกระดาษ A4 แนวตั้ง, Margins: Default, เปิด "Background graphics")</p>
       </div>
 
       {loading ? (
@@ -352,13 +485,13 @@ export default function PrintBills() {
           {sheets.map((pair, i) => (
             <div key={i} className="bill-sheet shadow-md">
               <div className="bill-half">
-                <Bill b={pair[0]} monthLabel={monthLabel} dateLabel={dateLabel} />
+                <Bill b={pair[0]} set={(f, v) => setField(pair[0].roomId, f, v)} />
               </div>
               {pair[1] && (
                 <>
                   <div className="bill-cut">✂ รอยตัด (สำหรับแบ่งครึ่งกระดาษ A4) ✂</div>
                   <div className="bill-half">
-                    <Bill b={pair[1]} monthLabel={monthLabel} dateLabel={dateLabel} />
+                    <Bill b={pair[1]} set={(f, v) => setField(pair[1].roomId, f, v)} />
                   </div>
                 </>
               )}
