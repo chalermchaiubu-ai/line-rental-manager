@@ -138,7 +138,35 @@ export default function MeterEntry() {
     );
   }
 
-  async function saveRow(row) {
+  // Things that look wrong but are the admin's call: shown in a confirm box,
+  // and saved exactly as entered once the admin confirms.
+  function rowWarnings(row) {
+    const w = [];
+    const eCur = toNum(row.electricCurrent);
+    const wCur = toNum(row.waterCurrent);
+    const eUnits = eCur !== null ? (toNum(row.electricPrevious) === null ? eCur : toNum(row.electricUnits)) : null;
+    const wUnits = wCur !== null ? (toNum(row.waterPrevious) === null ? wCur : toNum(row.waterUnits)) : null;
+    if (eCur !== null && toNum(row.electricPrevious) === null)
+      w.push(`ไม่มีเลขไฟก่อนหน้า → จะคิดหน่วยไฟ = ${eCur} หน่วย (เลขปัจจุบันทั้งหมด)`);
+    if (wCur !== null && toNum(row.waterPrevious) === null)
+      w.push(`ไม่มีเลขน้ำก่อนหน้า → จะคิดหน่วยน้ำ = ${wCur} หน่วย (เลขปัจจุบันทั้งหมด)`);
+    if (eUnits !== null && eUnits > HIGH_ELECTRIC_UNITS) w.push(`หน่วยไฟ ${eUnits} หน่วย สูงผิดปกติ`);
+    if (wUnits !== null && wUnits > HIGH_WATER_UNITS) w.push(`หน่วยน้ำ ${wUnits} หน่วย สูงผิดปกติ (มีทศนิยมไหม?)`);
+    return w;
+  }
+
+  function confirmWarnings(list) {
+    if (list.length === 0) return true;
+    return window.confirm(
+      `⚠️ ตรวจพบตัวเลขที่ควรตรวจสอบ:\n\n${list.join('\n')}\n\nกด "ตกลง" เพื่อยืนยันและบันทึกตามที่กรอก\nกด "ยกเลิก" เพื่อกลับไปแก้ไข`
+    );
+  }
+
+  async function saveRow(row, { skipConfirm = false } = {}) {
+    if (!skipConfirm) {
+      const w = rowWarnings(row);
+      if (!confirmWarnings(w.map((x) => `ห้อง ${row.roomNumber}: ${x}`))) return false;
+    }
     const electricCurrent = toNum(row.electricCurrent);
     const waterCurrent = toNum(row.waterCurrent);
     if (electricCurrent === null && waterCurrent === null) {
@@ -156,25 +184,18 @@ export default function MeterEntry() {
       setRows((prev) => prev.map((r) => (r.roomId === row.roomId ? { ...r, saveState: 'error', saveError: msg } : r)));
       return false;
     };
+    // Missing "previous" is allowed once confirmed (rowWarnings): it's stored
+    // as 0, so units = the whole current reading — exactly what the admin saw.
     const electricPrevious = toNum(row.electricPrevious);
     const waterPrevious = toNum(row.waterPrevious);
-    // A current reading with no previous one used to save previous = 0, so the
-    // whole meter value became "units used" (a huge bill). Require it.
-    if (electricCurrent !== null && electricPrevious === null) {
-      return fail('ไม่มีเลขไฟก่อนหน้า — กรอกเลขเดือนที่แล้ว (ถ้าเพิ่งเริ่มใช้ ให้ใส่เท่ากับเลขปัจจุบัน)');
-    }
-    if (waterCurrent !== null && waterPrevious === null) {
-      return fail('ไม่มีเลขน้ำก่อนหน้า — กรอกเลขเดือนที่แล้ว (ถ้าเพิ่งเริ่มใช้ ให้ใส่เท่ากับเลขปัจจุบัน)');
-    }
-    if (electricCurrent !== null && electricCurrent < electricPrevious) {
-      return fail('เลขไฟปัจจุบันน้อยกว่าเลขก่อนหน้า — ตรวจเลขอีกครั้ง (มิเตอร์เปลี่ยน/วนรอบ: ใส่ก่อนหน้า = ปัจจุบัน แล้วพิมพ์หน่วยเอง)');
-    }
+    // The only hard stop: negative units can't be stored (DB requires
+    // previous <= current). Typing the wanted units fixes it.
     const eUnits = toNum(row.electricUnits);
     const wUnits = toNum(row.waterUnits);
-    if (eUnits !== null && eUnits < 0) {
-      return fail('หน่วยไฟติดลบ — ตรวจเลข หรือพิมพ์จำนวนหน่วยที่ต้องการคิดในช่องหน่วยไฟ');
+    if (electricCurrent !== null && electricPrevious !== null && (electricCurrent < electricPrevious || (eUnits !== null && eUnits < 0))) {
+      return fail('หน่วยไฟติดลบ — พิมพ์จำนวนหน่วยไฟที่ต้องการคิดในช่องหน่วยไฟ');
     }
-    if (wUnits !== null && wUnits < 0) {
+    if (waterCurrent !== null && waterPrevious !== null && (waterCurrent < waterPrevious || (wUnits !== null && wUnits < 0))) {
       return fail('หน่วยน้ำติดลบ — พิมพ์จำนวนหน่วยน้ำที่ต้องการคิดในช่องหน่วยน้ำ');
     }
 
@@ -226,12 +247,16 @@ export default function MeterEntry() {
   }
 
   async function saveAll() {
+    const candidates = rows.filter((r) => toNum(r.electricCurrent) !== null || toNum(r.waterCurrent) !== null);
+    // One confirm box listing every room's warnings, instead of one per room.
+    const allWarnings = candidates.flatMap((r) => rowWarnings(r).map((x) => `ห้อง ${r.roomNumber}: ${x}`));
+    if (!confirmWarnings(allWarnings)) return;
+
     setSavingAll(true);
     setBannerMsg(null);
-    const candidates = rows.filter((r) => toNum(r.electricCurrent) !== null || toNum(r.waterCurrent) !== null);
     let okCount = 0;
     for (const row of candidates) {
-      const ok = await saveRow(row);
+      const ok = await saveRow(row, { skipConfirm: true });
       if (ok) okCount += 1;
     }
     setSavingAll(false);
