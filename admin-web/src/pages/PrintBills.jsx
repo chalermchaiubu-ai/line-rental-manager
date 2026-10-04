@@ -33,10 +33,29 @@ function thaiMonth(ym) {
   if (!y || !m) return ym;
   return new Date(y, m - 1, 1).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
 }
+// dd/mm/yyyy in Buddhist Era, e.g. 2026-09-30 -> "30/09/2569"
 function thaiDate(ymd) {
   if (!ymd) return '';
   const [y, m, d] = ymd.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('th-TH', { day: 'numeric', month: 'numeric', year: 'numeric' });
+  if (!y || !m || !d) return '';
+  return `${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}/${y + 543}`;
+}
+
+// Bills are issued at the END of the month they cover, using meter readings
+// taken at that time (recorded on the Meter page under the following month,
+// e.g. readings entered for 2026-10 = usage for September).
+// So the bill's "ประจำเดือน" = the month before the readings month, and the
+// default bill date = the 30th of that month (e.g. 30/09/2569; Feb = 28/29).
+function prevMonth(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+// Owner bills on the 30th of every month; February (no 30th) uses its last day.
+function lastDayOf(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const day = Math.min(30, new Date(y, m, 0).getDate());
+  return `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 const showNum = (v) =>
   v === null || v === undefined || v === '' ? '' : Number(v).toLocaleString('th-TH', { maximumFractionDigits: 2, useGrouping: false });
@@ -254,7 +273,9 @@ function saveDraft(ym, edits) {
 
 export default function PrintBills() {
   const [billingMonth, setBillingMonth] = useState(currentBillingMonth());
-  const [billDate, setBillDate] = useState(todayStr());
+  // What's printed on every bill (owner: bill at month end, all rooms).
+  const [billMonthYm, setBillMonthYm] = useState(prevMonth(currentBillingMonth()));
+  const [billDate, setBillDate] = useState(lastDayOf(prevMonth(currentBillingMonth())));
   const [includeOtherUnits, setIncludeOtherUnits] = useState(false);
   const [showNames, setShowNames] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -265,7 +286,23 @@ export default function PrintBills() {
 
   useEffect(() => {
     setEdits(loadDraft(billingMonth));
+    setBillMonthYm(prevMonth(billingMonth));
+    setBillDate(lastDayOf(prevMonth(billingMonth)));
   }, [billingMonth]);
+
+  // Month/date set in the toolbar apply to ALL bills: drop any per-bill
+  // overrides of those two fields so every bill shows the same value.
+  function applyToAll(field) {
+    setEdits((prev) => {
+      const next = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const { [field]: _drop, ...rest } = v || {};
+        next[k] = rest;
+      }
+      saveDraft(billingMonth, next);
+      return next;
+    });
+  }
 
   function setField(roomId, field, value) {
     setEdits((prev) => {
@@ -374,7 +411,7 @@ export default function PrintBills() {
     };
   }, [billingMonth]);
 
-  const monthLabel = thaiMonth(billingMonth);
+  const monthLabel = thaiMonth(billMonthYm);
   const dateLabel = thaiDate(billDate);
 
   const shown = useMemo(
@@ -441,13 +478,35 @@ export default function PrintBills() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
-          <label>
-            ประจำเดือน{' '}
+          <label title="เดือนที่กรอกเลขมิเตอร์ในหน้า มิเตอร์">
+            ใช้เลขมิเตอร์ที่บันทึกเดือน{' '}
             <input type="month" value={billingMonth} onChange={(e) => setBillingMonth(e.target.value)} className="ml-1 rounded-md border border-slate-300 px-2 py-1" />
           </label>
           <label>
-            วันที่ออกบิล{' '}
-            <input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} className="ml-1 rounded-md border border-slate-300 px-2 py-1" />
+            <b>ประจำเดือน (บนบิล)</b>{' '}
+            <input
+              type="month"
+              value={billMonthYm}
+              onChange={(e) => {
+                setBillMonthYm(e.target.value);
+                if (e.target.value) setBillDate(lastDayOf(e.target.value));
+                applyToAll('month');
+                applyToAll('date');
+              }}
+              className="ml-1 rounded-md border border-sky-400 px-2 py-1"
+            />
+          </label>
+          <label>
+            <b>วันที่ (บนบิล)</b>{' '}
+            <input
+              type="date"
+              value={billDate}
+              onChange={(e) => {
+                setBillDate(e.target.value);
+                applyToAll('date');
+              }}
+              className="ml-1 rounded-md border border-sky-400 px-2 py-1"
+            />
           </label>
           <label className="inline-flex items-center gap-1.5">
             <input type="checkbox" checked={showNames} onChange={(e) => setShowNames(e.target.checked)} /> ใส่ชื่อผู้เช่า
