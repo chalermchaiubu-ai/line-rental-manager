@@ -150,8 +150,10 @@ export default function MeterEntry() {
       w.push(`ไม่มีเลขไฟก่อนหน้า → จะคิดหน่วยไฟ = ${eCur} หน่วย (เลขปัจจุบันทั้งหมด)`);
     if (wCur !== null && toNum(row.waterPrevious) === null)
       w.push(`ไม่มีเลขน้ำก่อนหน้า → จะคิดหน่วยน้ำ = ${wCur} หน่วย (เลขปัจจุบันทั้งหมด)`);
-    if (eUnits !== null && eUnits > HIGH_ELECTRIC_UNITS) w.push(`หน่วยไฟ ${eUnits} หน่วย สูงผิดปกติ`);
-    if (wUnits !== null && wUnits > HIGH_WATER_UNITS) w.push(`หน่วยน้ำ ${wUnits} หน่วย สูงผิดปกติ (มีทศนิยมไหม?)`);
+    if (eUnits !== null && eUnits < 0) w.push(`หน่วยไฟติดลบ ${eUnits} → จะคิดเป็น ${Math.abs(eUnits)} หน่วย`);
+    if (wUnits !== null && wUnits < 0) w.push(`หน่วยน้ำติดลบ ${wUnits} → จะคิดเป็น ${Math.abs(wUnits)} หน่วย`);
+    if (eUnits !== null && Math.abs(eUnits) > HIGH_ELECTRIC_UNITS) w.push(`หน่วยไฟ ${Math.abs(eUnits)} หน่วย สูงผิดปกติ`);
+    if (wUnits !== null && Math.abs(wUnits) > HIGH_WATER_UNITS) w.push(`หน่วยน้ำ ${Math.abs(wUnits)} หน่วย สูงผิดปกติ (มีทศนิยมไหม?)`);
     return w;
   }
 
@@ -186,18 +188,24 @@ export default function MeterEntry() {
     };
     // Missing "previous" is allowed once confirmed (rowWarnings): it's stored
     // as 0, so units = the whole current reading — exactly what the admin saw.
-    const electricPrevious = toNum(row.electricPrevious);
-    const waterPrevious = toNum(row.waterPrevious);
-    // The only hard stop: negative units can't be stored (DB requires
-    // previous <= current). Typing the wanted units fixes it.
-    const eUnits = toNum(row.electricUnits);
-    const wUnits = toNum(row.waterUnits);
-    if (electricCurrent !== null && electricPrevious !== null && (electricCurrent < electricPrevious || (eUnits !== null && eUnits < 0))) {
-      return fail('หน่วยไฟติดลบ — พิมพ์จำนวนหน่วยไฟที่ต้องการคิดในช่องหน่วยไฟ');
+    let electricPrevious = toNum(row.electricPrevious);
+    let waterPrevious = toNum(row.waterPrevious);
+    // Negative units (current < previous, e.g. broken or replaced meter): the
+    // DB can't store them (it requires previous <= current), so — once the
+    // admin has confirmed (rowWarnings) — bill the absolute value instead:
+    // keep the real current reading and set previous = current - |units|.
+    if (electricCurrent !== null && electricPrevious !== null && electricCurrent < electricPrevious) {
+      electricPrevious = electricCurrent - Math.abs(electricCurrent - electricPrevious);
     }
-    if (waterCurrent !== null && waterPrevious !== null && (waterCurrent < waterPrevious || (wUnits !== null && wUnits < 0))) {
-      return fail('หน่วยน้ำติดลบ — พิมพ์จำนวนหน่วยน้ำที่ต้องการคิดในช่องหน่วยน้ำ');
+    if (waterCurrent !== null && waterPrevious !== null && waterCurrent < waterPrevious) {
+      waterPrevious = waterCurrent - Math.abs(waterCurrent - waterPrevious);
     }
+    const fixedRow = {
+      electricPrevious: electricPrevious === null ? '' : String(electricPrevious),
+      waterPrevious: waterPrevious === null ? '' : String(waterPrevious),
+      electricUnits: electricCurrent !== null && electricPrevious !== null ? electricCurrent - electricPrevious : row.electricUnits,
+      waterUnits: waterCurrent !== null && waterPrevious !== null ? waterCurrent - waterPrevious : row.waterUnits,
+    };
 
     setRows((prev) => prev.map((r) => (r.roomId === row.roomId ? { ...r, saveState: 'saving', saveError: null } : r)));
 
@@ -240,7 +248,7 @@ export default function MeterEntry() {
 
     setRows((prev) =>
       prev.map((r) =>
-        r.roomId === row.roomId ? { ...r, existingId: data?.id || r.existingId, saveState: 'saved' } : r
+        r.roomId === row.roomId ? { ...r, ...fixedRow, existingId: data?.id || r.existingId, saveState: 'saved' } : r
       )
     );
     return true;
