@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../auth/permissions';
 import { sortRooms } from '../lib/sortRooms';
 
+// End-of-month billing: from the 25th the default moves to the next round
+// (see lib/billingMonth.js).
 function currentBillingMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return defaultReadingsMonth();
 }
 
 function addDays(dateStr, days) {

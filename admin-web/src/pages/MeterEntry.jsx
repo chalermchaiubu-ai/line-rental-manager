@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 import { useAuth } from '../auth/AuthContext';
 import { sortRooms } from '../lib/sortRooms';
 import { cleanRaw, rawOr, padLike, isMissingRawColumn } from '../lib/meterText';
@@ -17,9 +18,10 @@ const BROKEN_METER_ROOMS = new Set(['2', '24']);
 const HIGH_WATER_UNITS = 100;
 const HIGH_ELECTRIC_UNITS = 1500;
 
+// End-of-month billing: from the 25th the default moves to the next round
+// (see lib/billingMonth.js).
 function currentBillingMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return defaultReadingsMonth();
 }
 
 function toNum(v) {
@@ -326,6 +328,9 @@ export default function MeterEntry() {
               onChange={(e) => setBillingMonth(e.target.value)}
               className="ml-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
             />
+            <span className="ml-2 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+              = บิลประจำเดือน{thaiMonthName(usageMonthOf(billingMonth))}
+            </span>
           </p>
         </div>
         <button

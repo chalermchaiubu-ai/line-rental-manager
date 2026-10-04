@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 import { sortRooms } from '../lib/sortRooms';
 import { rawOr } from '../lib/meterText';
 
@@ -20,9 +21,10 @@ const DORM = {
   phone: '089-4286622, 087-0419568',
 };
 
+// End-of-month billing: from the 25th the default moves to the next round
+// (see lib/billingMonth.js).
 function currentBillingMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return defaultReadingsMonth();
 }
 function todayStr() {
   const d = new Date();

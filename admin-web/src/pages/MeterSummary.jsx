@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 import { sortRooms } from '../lib/sortRooms';
 import { rawOr } from '../lib/meterText';
 
@@ -13,9 +14,10 @@ import { rawOr } from '../lib/meterText';
 // Two outputs: print (browser print, A4 landscape) and .xlsx with live formulas.
 // ----------------------------------------------------------------------------
 
+// End-of-month billing: from the 25th the default moves to the next round
+// (see lib/billingMonth.js).
 function currentBillingMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return defaultReadingsMonth();
 }
 
 function thaiMonth(ym) {
@@ -149,7 +151,7 @@ export default function MeterSummary() {
       // Loaded on demand from SheetJS's official CDN so the app bundle stays small.
       const XLSX = await import(/* @vite-ignore */ 'https://cdn.sheetjs.com/xlsx-0.20.3/package/xlsx.mjs');
 
-      const title = `สรุปค่าน้ำ-ค่าไฟ เดือน${thaiMonth(billingMonth)}`;
+      const title = `สรุปค่าน้ำ-ค่าไฟ ประจำเดือน${thaiMonthName(usageMonthOf(billingMonth))} (เลขมิเตอร์ที่บันทึกเดือน ${billingMonth})`;
       const header = [
         'ห้อง', 'ผู้เช่า',
         'ไฟ-เลขก่อน', 'ไฟ-เลขหลัง', 'หน่วยไฟ', 'เรทไฟ (บาท/หน่วย)', 'ค่าไฟ (บาท)',
@@ -272,7 +274,7 @@ export default function MeterSummary() {
 
       <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3 print:mt-0 print:border-0 print:p-0">
         <div className="mb-2 flex items-baseline justify-between">
-          <h2 className="text-base font-semibold text-slate-900">สรุปค่าน้ำ-ค่าไฟ เดือน{thaiMonth(billingMonth)}</h2>
+          <h2 className="text-base font-semibold text-slate-900">สรุปค่าน้ำ-ค่าไฟ ประจำเดือน{thaiMonthName(usageMonthOf(billingMonth))}</h2>
           <p className="text-xs text-slate-500">
             {shown.length} ห้อง · พิมพ์เมื่อ {new Date().toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })}
           </p>
