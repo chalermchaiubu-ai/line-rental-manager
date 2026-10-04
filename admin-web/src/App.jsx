@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import Rooms from './pages/Rooms';
 import Tenants from './pages/Tenants';
 import MeterEntry from './pages/MeterEntry';
+import MeterSummary from './pages/MeterSummary';
 import BillGeneration from './pages/BillGeneration';
 import PaymentVerification from './pages/PaymentVerification';
 import Maintenance from './pages/Maintenance';
@@ -51,6 +52,14 @@ export default function App() {
               element={
                 <RequirePermission permission="ENTER_METER">
                   <MeterEntry />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="meter-summary"
+              element={
+                <RequirePermission permission="GENERATE_BILL">
+                  <MeterSummary />
                 </RequirePermission>
               }
             />

@@ -37,9 +37,9 @@ export default function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-slate-50 print:block print:h-auto print:bg-white">
       {/* Desktop sidebar */}
-      <aside className="hidden w-64 flex-col border-r border-slate-200 bg-white md:flex">
+      <aside className="hidden w-64 flex-col border-r border-slate-200 bg-white md:flex print:hidden">
         <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-900 text-sm font-bold text-white">
             CLT
@@ -63,8 +63,8 @@ export default function Layout() {
       </aside>
 
       {/* Mobile top bar + drawer */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden">
+      <div className="flex min-w-0 flex-1 flex-col print:block">
+        <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden print:hidden">
           <button
             onClick={() => setMobileOpen(true)}
             className="rounded-lg border border-slate-200 p-2 text-slate-600"
@@ -101,7 +101,7 @@ export default function Layout() {
           </div>
         )}
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 print:overflow-visible print:p-0">
           <Outlet />
         </main>
       </div>
