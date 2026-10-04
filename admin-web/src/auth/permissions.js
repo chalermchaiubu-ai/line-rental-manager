@@ -48,6 +48,7 @@ export const NAV_ITEMS = [
   { to: '/tenants', label: 'ผู้เช่า / สัญญา', icon: 'users', permission: 'VIEW_ROOMS' },
   { to: '/meters', label: 'มิเตอร์', icon: 'gauge', permission: 'ENTER_METER' },
   { to: '/meter-summary', label: 'สรุป/พิมพ์ค่าน้ำไฟ', icon: 'receipt', permission: 'GENERATE_BILL' },
+  { to: '/print-bills', label: 'พิมพ์บิล (ฟอร์ม)', icon: 'receipt', permission: 'GENERATE_BILL' },
   { to: '/bills', label: 'บิล', icon: 'receipt', permission: 'VIEW_ROOMS' },
   { to: '/payments', label: 'การชำระเงิน', icon: 'wallet', permission: 'VIEW_ROOMS' },
   { to: '/maintenance', label: 'งานซ่อม', icon: 'wrench', permission: 'HANDLE_MAINTENANCE' },

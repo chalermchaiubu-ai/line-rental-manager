@@ -8,6 +8,7 @@ import Rooms from './pages/Rooms';
 import Tenants from './pages/Tenants';
 import MeterEntry from './pages/MeterEntry';
 import MeterSummary from './pages/MeterSummary';
+import PrintBills from './pages/PrintBills';
 import BillGeneration from './pages/BillGeneration';
 import PaymentVerification from './pages/PaymentVerification';
 import Maintenance from './pages/Maintenance';
@@ -60,6 +61,14 @@ export default function App() {
               element={
                 <RequirePermission permission="GENERATE_BILL">
                   <MeterSummary />
+                </RequirePermission>
+              }
+            />
+            <Route
+              path="print-bills"
+              element={
+                <RequirePermission permission="GENERATE_BILL">
+                  <PrintBills />
                 </RequirePermission>
               }
             />
