@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { sortRooms } from '../lib/sortRooms';
+import { rawOr } from '../lib/meterText';
 
 // ----------------------------------------------------------------------------
 // สรุปค่าน้ำ-ค่าไฟ: one row per room with an active lease, for a billing month.
@@ -53,7 +54,7 @@ export default function MeterSummary() {
             .eq('status', 'active'),
           supabase
             .from('meter_readings')
-            .select('room_id, electric_previous, electric_current, electric_units, water_previous, water_current, water_units')
+            .select('*')
             .eq('billing_month', billingMonth),
         ]);
         if (roomsRes.error) throw roomsRes.error;
@@ -95,11 +96,15 @@ export default function MeterSummary() {
               hasMeter: Boolean(m),
               ePrev: m ? n(m.electric_previous) : null,
               eCur: m ? n(m.electric_current) : null,
+              ePrevTxt: m ? rawOr(m.electric_previous_raw, m.electric_previous) : '',
+              eCurTxt: m ? rawOr(m.electric_current_raw, m.electric_current) : '',
               eUnits,
               eRate,
               eAmt,
               wPrev: m ? n(m.water_previous) : null,
               wCur: m ? n(m.water_current) : null,
+              wPrevTxt: m ? rawOr(m.water_previous_raw, m.water_previous) : '',
+              wCurTxt: m ? rawOr(m.water_current_raw, m.water_current) : '',
               wUnits,
               wRate,
               wAmt,
@@ -185,6 +190,15 @@ export default function MeterSummary() {
       ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 14 } }];
       ws['!cols'] = [10, 18, 11, 11, 9, 10, 12, 11, 11, 9, 10, 12, 12, 14, 22].map((wch) => ({ wch }));
       // 2-decimal money format on amount columns
+      // Readings stay numbers (formulas need them) but display with the typed
+      // leading zeros, e.g. 054321 -> format "000000".
+      shown.forEach((r, i) => {
+        const x = firstDataRow + i;
+        [['C', r.ePrevTxt], ['D', r.eCurTxt], ['H', r.wPrevTxt], ['I', r.wCurTxt]].forEach(([c, txt]) => {
+          const cell = ws[`${c}${x}`];
+          if (cell && /^0\d+$/.test(txt || '')) cell.z = '0'.repeat(txt.length);
+        });
+      });
       const moneyCols = ['G', 'L', 'M', 'N'];
       for (let row = firstDataRow; row <= last + 1; row += 1) {
         for (const c of moneyCols) {
@@ -303,13 +317,13 @@ export default function MeterSummary() {
                   <tr key={r.roomId} className={`border-b border-slate-100 ${r.complete ? '' : 'bg-amber-50/60 print:bg-white'}`}>
                     <td className="px-2 py-1.5 font-medium text-slate-800">{r.roomNumber}</td>
                     <td className="px-2 py-1.5 text-slate-600">{r.tenantName}</td>
-                    <td className={`${td} border-l border-slate-100`}>{fmtUnits(r.ePrev)}</td>
-                    <td className={td}>{fmtUnits(r.eCur)}</td>
+                    <td className={`${td} border-l border-slate-100`}>{r.ePrevTxt || '-'}</td>
+                    <td className={td}>{r.eCurTxt || '-'}</td>
                     <td className={`${td} font-semibold`}>{fmtUnits(r.eUnits)}</td>
                     <td className={td}>{r.eRate === null ? '-' : fmtUnits(r.eRate)}</td>
                     <td className={td}>{fmt(r.eAmt)}</td>
-                    <td className={`${td} border-l border-slate-100`}>{fmtUnits(r.wPrev)}</td>
-                    <td className={td}>{fmtUnits(r.wCur)}</td>
+                    <td className={`${td} border-l border-slate-100`}>{r.wPrevTxt || '-'}</td>
+                    <td className={td}>{r.wCurTxt || '-'}</td>
                     <td className={`${td} font-semibold`}>{fmtUnits(r.wUnits)}</td>
                     <td className={td}>{r.wRate === null ? '-' : fmtUnits(r.wRate)}</td>
                     <td className={td}>{fmt(r.wAmt)}</td>

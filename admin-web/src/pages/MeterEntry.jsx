@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../auth/AuthContext';
 import { sortRooms } from '../lib/sortRooms';
+import { cleanRaw, rawOr, padLike, isMissingRawColumn } from '../lib/meterText';
 
 // Rooms with a known broken/faulty water meter (see
 // claude/meter-reading-form-upsert-fix.md, STEP 2 round 2, 2026-09-17 decision).
@@ -35,6 +36,7 @@ export default function MeterEntry() {
   const [rows, setRows] = useState([]); // [{ roomId, roomNumber, electricPrevious, electricCurrent, electricUnits, waterPrevious, waterCurrent, waterUnits, existingId, saveState }]
   const [savingAll, setSavingAll] = useState(false);
   const [bannerMsg, setBannerMsg] = useState(null);
+  const [rawUnsupported, setRawUnsupported] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +53,7 @@ export default function MeterEntry() {
           // automatic "previous reading" baseline.
           supabase
             .from('meter_readings')
-            .select('id, room_id, billing_month, electric_previous, electric_current, water_previous, water_current')
+            .select('*')
             .order('billing_month', { ascending: true }),
         ]);
         if (roomsRes.error) throw roomsRes.error;
@@ -65,10 +67,20 @@ export default function MeterEntry() {
           const priorRows = roomReadings.filter((r) => r.billing_month < billingMonth);
           const priorMonth = priorRows.length > 0 ? priorRows[priorRows.length - 1] : null;
 
-          const electricPrevious = thisMonth?.electric_previous ?? priorMonth?.electric_current ?? '';
-          const waterPrevious = thisMonth?.water_previous ?? priorMonth?.water_current ?? '';
-          const electricCurrent = thisMonth?.electric_current ?? '';
-          const waterCurrent = thisMonth?.water_current ?? '';
+          // Show readings as typed (keeps leading zeros, e.g. "0194"); fall back
+          // to the numeric value for rows saved before the *_raw columns existed.
+          const electricPrevious = thisMonth
+            ? rawOr(thisMonth.electric_previous_raw, thisMonth.electric_previous)
+            : priorMonth
+              ? rawOr(priorMonth.electric_current_raw, priorMonth.electric_current)
+              : '';
+          const waterPrevious = thisMonth
+            ? rawOr(thisMonth.water_previous_raw, thisMonth.water_previous)
+            : priorMonth
+              ? rawOr(priorMonth.water_current_raw, priorMonth.water_current)
+              : '';
+          const electricCurrent = thisMonth ? rawOr(thisMonth.electric_current_raw, thisMonth.electric_current) : '';
+          const waterCurrent = thisMonth ? rawOr(thisMonth.water_current_raw, thisMonth.water_current) : '';
 
           return {
             roomId: room.id,
@@ -118,7 +130,7 @@ export default function MeterEntry() {
         if ('electricUnits' in patch) {
           const c = toNum(next.electricCurrent);
           const u = toNum(patch.electricUnits);
-          if (c !== null && u !== null) next.electricPrevious = String(c - u);
+          if (c !== null && u !== null) next.electricPrevious = padLike(String(c - u), next.electricCurrent);
         } else {
           const p = toNum(next.electricPrevious);
           const c = toNum(next.electricCurrent);
@@ -127,7 +139,7 @@ export default function MeterEntry() {
         if ('waterUnits' in patch) {
           const c = toNum(next.waterCurrent);
           const u = toNum(patch.waterUnits);
-          if (c !== null && u !== null) next.waterPrevious = String(c - u);
+          if (c !== null && u !== null) next.waterPrevious = padLike(String(c - u), next.waterCurrent);
         } else {
           const p = toNum(next.waterPrevious);
           const c = toNum(next.waterCurrent);
@@ -200,9 +212,25 @@ export default function MeterEntry() {
     if (waterCurrent !== null && waterPrevious !== null && waterCurrent < waterPrevious) {
       waterPrevious = waterCurrent - Math.abs(waterCurrent - waterPrevious);
     }
+    // Text exactly as typed (leading zeros kept). A "previous" that had to be
+    // recomputed is padded to the same width as the current reading.
+    const eCurRaw = cleanRaw(row.electricCurrent);
+    const wCurRaw = cleanRaw(row.waterCurrent);
+    const ePrevRaw =
+      electricPrevious === null
+        ? ''
+        : electricPrevious === toNum(row.electricPrevious)
+          ? padLike(cleanRaw(row.electricPrevious), eCurRaw)
+          : padLike(String(electricPrevious), eCurRaw);
+    const wPrevRaw =
+      waterPrevious === null
+        ? ''
+        : waterPrevious === toNum(row.waterPrevious)
+          ? padLike(cleanRaw(row.waterPrevious), wCurRaw)
+          : padLike(String(waterPrevious), wCurRaw);
     const fixedRow = {
-      electricPrevious: electricPrevious === null ? '' : String(electricPrevious),
-      waterPrevious: waterPrevious === null ? '' : String(waterPrevious),
+      electricPrevious: ePrevRaw,
+      waterPrevious: wPrevRaw,
       electricUnits: electricCurrent !== null && electricPrevious !== null ? electricCurrent - electricPrevious : row.electricUnits,
       waterUnits: waterCurrent !== null && waterPrevious !== null ? waterCurrent - waterPrevious : row.waterUnits,
     };
@@ -226,12 +254,21 @@ export default function MeterEntry() {
       recorded_by: staff?.id || null,
       recorded_at: new Date().toISOString(),
     };
+    const rawFields = {
+      electric_previous_raw: ePrevRaw || null,
+      electric_current_raw: (electricCurrent !== null ? eCurRaw : ePrevRaw) || null,
+      water_previous_raw: wPrevRaw || null,
+      water_current_raw: (waterCurrent !== null ? wCurRaw : wPrevRaw) || null,
+    };
 
-    const { data, error: upsertError } = await supabase
-      .from('meter_readings')
-      .upsert(payload, { onConflict: 'room_id,billing_month' })
-      .select('id')
-      .single();
+    const upsert = (body) =>
+      supabase.from('meter_readings').upsert(body, { onConflict: 'room_id,billing_month' }).select('id').single();
+    let { data, error: upsertError } = await upsert(rawUnsupported ? payload : { ...payload, ...rawFields });
+    // Raw-text columns not added yet (SQL 003 not run): save the numbers anyway.
+    if (upsertError && isMissingRawColumn(upsertError)) {
+      setRawUnsupported(true);
+      ({ data, error: upsertError } = await upsert(payload));
+    }
 
     if (upsertError) {
       const m = upsertError.message || '';
@@ -307,6 +344,12 @@ export default function MeterEntry() {
         (ก่อนหน้า = ปัจจุบัน − หน่วย) · ช่องหน่วยสีเหลือง = หน่วยสูงผิดปกติ ตรวจก่อนบันทึก
       </div>
 
+      {rawUnsupported && (
+        <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          บันทึกตัวเลขได้ตามปกติ แต่ยังเก็บเลข 0 นำหน้าไม่ได้ — ให้เจ้าของรันไฟล์ SQL{' '}
+          <code>003_meter_raw_text.sql</code> ใน Supabase ก่อน (ครั้งเดียว)
+        </div>
+      )}
       {bannerMsg && (
         <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
           {bannerMsg}
@@ -357,8 +400,8 @@ export default function MeterEntry() {
                     </td>
                     <td className="px-2 py-2">
                       <input
-                        type="number"
-                        step="any"
+                        type="text"
+                        inputMode="decimal"
                         value={row.electricPrevious}
                         onChange={(e) => updateRow(row.roomId, { electricPrevious: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -366,8 +409,8 @@ export default function MeterEntry() {
                     </td>
                     <td className="px-2 py-2">
                       <input
-                        type="number"
-                        step="any"
+                        type="text"
+                        inputMode="decimal"
                         value={row.electricCurrent}
                         onChange={(e) => updateRow(row.roomId, { electricCurrent: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -386,8 +429,8 @@ export default function MeterEntry() {
                     </td>
                     <td className="px-2 py-2">
                       <input
-                        type="number"
-                        step="any"
+                        type="text"
+                        inputMode="decimal"
                         value={row.waterPrevious}
                         onChange={(e) => updateRow(row.roomId, { waterPrevious: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"
@@ -395,8 +438,8 @@ export default function MeterEntry() {
                     </td>
                     <td className="px-2 py-2">
                       <input
-                        type="number"
-                        step="any"
+                        type="text"
+                        inputMode="decimal"
                         value={row.waterCurrent}
                         onChange={(e) => updateRow(row.roomId, { waterCurrent: e.target.value })}
                         className="w-24 rounded-md border border-slate-300 px-2 py-1"

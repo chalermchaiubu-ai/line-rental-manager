@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { sortRooms } from '../lib/sortRooms';
+import { rawOr } from '../lib/meterText';
 
 // ----------------------------------------------------------------------------
 // พิมพ์บิล (ฟอร์มจดหมายเวียน) — reproduces the owner's paper bill
@@ -308,7 +309,7 @@ export default function PrintBills() {
           supabase.from('leases').select('room_id, tenant_id').eq('status', 'active'),
           supabase
             .from('meter_readings')
-            .select('room_id, electric_previous, electric_current, electric_units, water_previous, water_current, water_units')
+            .select('*')
             .eq('billing_month', billingMonth),
         ]);
         for (const r of [roomsRes, typesRes, leasesRes, metersRes]) if (r.error) throw r.error;
@@ -348,11 +349,12 @@ export default function PrintBills() {
             kind: roomKind(typeById.get(room.room_type_id)),
             tenantName: nm && nm !== placeholder ? nm : '',
             hasMeter: Boolean(m),
-            eCur: m?.electric_current,
-            ePrev: m?.electric_previous,
+            // as typed, leading zeros kept (e.g. "054321")
+            eCur: m ? rawOr(m.electric_current_raw, m.electric_current) : '',
+            ePrev: m ? rawOr(m.electric_previous_raw, m.electric_previous) : '',
             eUnits: m ? m.electric_units ?? Number(m.electric_current) - Number(m.electric_previous) : null,
-            wCur: m?.water_current,
-            wPrev: m?.water_previous,
+            wCur: m ? rawOr(m.water_current_raw, m.water_current) : '',
+            wPrev: m ? rawOr(m.water_previous_raw, m.water_previous) : '',
             wUnits: m ? m.water_units ?? Number(m.water_current) - Number(m.water_previous) : null,
           };
         });
@@ -385,11 +387,11 @@ export default function PrintBills() {
             tenantName: showNames ? b.tenantName : '',
             month: monthLabel,
             date: dateLabel,
-            eCur: showNum(b.eCur),
-            ePrev: showNum(b.ePrev),
+            eCur: b.eCur ?? '',
+            ePrev: b.ePrev ?? '',
             eUnits: showNum(b.eUnits),
-            wCur: showNum(b.wCur),
-            wPrev: showNum(b.wPrev),
+            wCur: b.wCur ?? '',
+            wPrev: b.wPrev ?? '',
             wUnits: showNum(b.wUnits),
           };
           return { ...base, ...(edits[b.roomId] || {}) };
