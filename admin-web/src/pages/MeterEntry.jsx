@@ -106,12 +106,23 @@ export default function MeterEntry() {
         // Auto-recompute units whenever previous/current change, unless the
         // caller is explicitly setting the units field itself (manual override —
         // used for broken-meter rooms per BROKEN_METER_ROOMS).
-        if (!('electricUnits' in patch)) {
+        // Units are generated in the DB as current - previous, so a manually
+        // typed unit count (broken meters, rooms 2/24) is kept by moving
+        // "previous" to current - units.
+        if ('electricUnits' in patch) {
+          const c = toNum(next.electricCurrent);
+          const u = toNum(patch.electricUnits);
+          if (c !== null && u !== null) next.electricPrevious = String(c - u);
+        } else {
           const p = toNum(next.electricPrevious);
           const c = toNum(next.electricCurrent);
           next.electricUnits = p !== null && c !== null ? c - p : next.electricUnits;
         }
-        if (!('waterUnits' in patch)) {
+        if ('waterUnits' in patch) {
+          const c = toNum(next.waterCurrent);
+          const u = toNum(patch.waterUnits);
+          if (c !== null && u !== null) next.waterPrevious = String(c - u);
+        } else {
           const p = toNum(next.waterPrevious);
           const c = toNum(next.waterCurrent);
           next.waterUnits = p !== null && c !== null ? c - p : next.waterUnits;
@@ -166,15 +177,17 @@ export default function MeterEntry() {
     // If only one of electric/water was filled, the other used to save
     // current = 0 (fails the DB's previous<=current check, or bills a wrong
     // amount). Keep the unfilled side at "no usage": current = previous, 0 units.
+    // electric_units / water_units are GENERATED columns in the DB
+    // (current - previous) — they can't be written, only derived. A manually
+    // typed unit count is therefore stored by adjusting "previous" (see
+    // updateRow), so current - previous == the units the owner chose.
     const payload = {
       room_id: row.roomId,
       billing_month: billingMonth,
       electric_previous: electricPrevious ?? 0,
       electric_current: electricCurrent ?? electricPrevious ?? 0,
-      electric_units: electricCurrent === null ? 0 : eUnits ?? 0,
       water_previous: waterPrevious ?? 0,
       water_current: waterCurrent ?? waterPrevious ?? 0,
-      water_units: waterCurrent === null ? 0 : wUnits ?? 0,
       recorded_by: staff?.id || null,
       recorded_at: new Date().toISOString(),
     };
@@ -246,9 +259,9 @@ export default function MeterEntry() {
       </div>
 
       <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-        ห้อง/หน่วยที่มิเตอร์น้ำชำรุด (เช่น ห้อง 2, 24): ให้ใส่ "เลขก่อนหน้า" เท่ากับ "เลขปัจจุบัน" แล้วพิมพ์
-        จำนวน "หน่วยน้ำ" ที่ต้องการคิดบิลด้วยตนเองในช่องขวาสุด ระบบจะใช้ตัวเลขที่พิมพ์ในช่องหน่วยเป็นหลัก
-        ไม่คำนวณทับจากเลขมิเตอร์
+        ห้อง/หน่วยที่มิเตอร์น้ำชำรุด (เช่น ห้อง 2, 24): ใส่ "เลขปัจจุบัน" ก่อน แล้วพิมพ์จำนวน "หน่วยน้ำ"
+        ที่ต้องการคิดบิลในช่องหน่วยได้เลย — ระบบจะปรับ "เลขก่อนหน้า" ให้อัตโนมัติ (ก่อนหน้า = ปัจจุบัน − หน่วย)
+        เพื่อให้บิลคิดตามจำนวนหน่วยที่คุณพิมพ์
       </div>
 
       {bannerMsg && (
