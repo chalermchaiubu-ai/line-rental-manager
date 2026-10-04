@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../auth/permissions';
+import { sortRooms } from '../lib/sortRooms';
 
 function currentBillingMonth() {
   const now = new Date();
@@ -40,7 +41,7 @@ export default function BillGeneration() {
       const { data, error: err } = await supabase.from('rooms').select('id, room_number').order('room_number');
       if (!cancelled) {
         if (err) setError(err.message);
-        else setRooms(data || []);
+        else setRooms(sortRooms(data));
         setLoadingRooms(false);
       }
     }

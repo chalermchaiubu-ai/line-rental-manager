@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
 // ----------------------------------------------------------------------------
@@ -49,13 +49,33 @@ export function AuthProvider({ children }) {
   const [staff, setStaff] = useState(undefined); // undefined = loading, null = not linked
   const [staffError, setStaffError] = useState(null);
 
+  // Which auth user the current `staff` value belongs to, and a counter so a
+  // slow, outdated profile fetch can't overwrite a newer one.
+  const loadedForUserId = useRef(undefined);
+  const requestSeq = useRef(0);
+
   const loadStaff = useCallback(async (authUser) => {
+    const userId = authUser?.id ?? null;
+    // Token refreshes / duplicate auth events for the same user: keep what we
+    // already have instead of flashing the loading screen again.
+    if (userId === loadedForUserId.current) return;
+    loadedForUserId.current = userId;
+    const seq = ++requestSeq.current;
+
     if (!authUser) {
       setStaff(null);
+      setStaffError(null);
       return;
     }
+
+    // New user just signed in: go back to "loading" so RequireAuth shows the
+    // spinner rather than the old signed-out `staff = null` (which rendered
+    // "ไม่สามารถเข้าใช้งานได้" for a moment right after login).
+    setStaff(undefined);
+    setStaffError(null);
     try {
       const profile = await fetchStaffProfile(authUser);
+      if (seq !== requestSeq.current) return;
       if (!profile) {
         setStaff(null);
         setStaffError(
@@ -69,6 +89,7 @@ export function AuthProvider({ children }) {
         setStaffError(null);
       }
     } catch (err) {
+      if (seq !== requestSeq.current) return;
       setStaff(null);
       setStaffError(err.message || 'เกิดข้อผิดพลาดในการโหลดข้อมูลพนักงาน');
     }

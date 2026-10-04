@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../auth/AuthContext';
 import { can } from '../auth/permissions';
+import { sortRooms } from '../lib/sortRooms';
 
 const STATUS_LABEL = {
   vacant: 'ว่าง',
@@ -62,7 +63,7 @@ export default function Rooms() {
 
         const roomTypesById = new Map((roomTypesRes.data || []).map((rt) => [rt.id, rt]));
 
-        const merged = (roomsRes.data || []).map((room) => {
+        const merged = sortRooms(roomsRes.data).map((room) => {
           const lease = activeLeasesByRoom.get(room.id) || null;
           const tenant = lease ? tenantsById.get(lease.tenant_id) : null;
           const roomType = roomTypesById.get(room.room_type_id) || null;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../auth/AuthContext';
+import { sortRooms } from '../lib/sortRooms';
 
 // Rooms with a known broken/faulty water meter (see
 // claude/meter-reading-form-upsert-fix.md, STEP 2 round 2, 2026-09-17 decision).
@@ -52,7 +53,7 @@ export default function MeterEntry() {
 
         const allReadings = readingsRes.data || [];
 
-        const built = (roomsRes.data || []).map((room) => {
+        const built = sortRooms(roomsRes.data).map((room) => {
           const roomReadings = allReadings.filter((r) => r.room_id === room.id);
           const thisMonth = roomReadings.find((r) => r.billing_month === billingMonth) || null;
           const priorRows = roomReadings.filter((r) => r.billing_month < billingMonth);
