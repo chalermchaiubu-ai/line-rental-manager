@@ -31,6 +31,9 @@ async function loadLibs() {
 async function billToCanvas(el) {
   const { htmlToImage } = await loadLibs();
   if (document.fonts?.ready) await document.fonts.ready;
+  // A field still being edited is highlighted yellow on screen; drop focus so
+  // the highlight doesn't end up in the PDF.
+  if (document.activeElement && el.contains(document.activeElement)) document.activeElement.blur();
   return htmlToImage.toCanvas(el, { pixelRatio: 2.5, backgroundColor: '#ffffff' });
 }
 
