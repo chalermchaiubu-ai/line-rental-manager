@@ -43,6 +43,24 @@ function inputsToText(liveEl, clonedEl) {
     span.style.minHeight = '1em';
     input.replaceWith(span);
   });
+  // แอร์/พัดลม tick boxes are <button>s, whose text html2canvas draws too high;
+  // swap them for a plain bordered box with the ✓ centred.
+  clonedEl.querySelectorAll('button').forEach((btn) => {
+    const box = clonedEl.ownerDocument.createElement('span');
+    box.textContent = btn.textContent;
+    Object.assign(box.style, {
+      display: 'inline-block',
+      width: '13px',
+      height: '13px',
+      lineHeight: '12px',
+      textAlign: 'center',
+      fontSize: '11px',
+      border: '1px solid #64748b',
+      margin: '0 2px',
+      verticalAlign: '-2px',
+    });
+    btn.replaceWith(box);
+  });
 }
 
 async function billToCanvas(el) {
