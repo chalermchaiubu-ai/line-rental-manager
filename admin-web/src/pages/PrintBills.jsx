@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabaseClient';
 import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 import { sortRooms } from '../lib/sortRooms';
 import { rawOr } from '../lib/meterText';
+import { downloadOneBill, downloadBillsZip, downloadBillsCombined } from '../lib/billPdf';
 
 // ----------------------------------------------------------------------------
 // พิมพ์บิล (ฟอร์มจดหมายเวียน) — reproduces the owner's paper bill
@@ -113,7 +114,7 @@ function Bill({ b, set }) {
   const totalShown = b.total !== undefined && b.total !== '' ? b.total : money(autoTotal);
 
   return (
-    <div className="bill flex h-full flex-col rounded-lg border border-slate-300 px-4 py-3">
+    <div data-bill-room={b.roomId} className="bill flex h-full flex-col rounded-lg border border-slate-300 bg-white px-4 py-3">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-[19px] font-bold leading-tight text-sky-700">{DORM.name}</p>
@@ -290,6 +291,7 @@ export default function PrintBills() {
   const [showNames, setShowNames] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(null); // null | 'กำลังสร้าง PDF 3/28…'
   const [bills, setBills] = useState([]);
   const [placeholderName, setPlaceholderName] = useState(null);
   const [edits, setEdits] = useState(() => loadDraft(currentBillingMonth()));
@@ -460,6 +462,35 @@ export default function PrintBills() {
   const sheets = [];
   for (let i = 0; i < shown.length; i += 2) sheets.push(shown.slice(i, i + 2));
 
+  const billEl = (roomId) => document.querySelector(`[data-bill-room="${roomId}"]`);
+  const monthForFile = shown[0]?.month || monthLabel;
+
+  async function runOne(b) {
+    setError(null);
+    setPdfBusy(`กำลังสร้าง PDF ห้อง ${b.roomNumber}…`);
+    try {
+      await downloadOneBill(billEl(b.roomId), b.roomNumber, monthForFile);
+    } catch (err) {
+      setError(`สร้าง PDF ไม่สำเร็จ: ${err.message || err}`);
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
+  async function runPdf(kind) {
+    setError(null);
+    const items = shown.map((b) => ({ el: billEl(b.roomId), roomNumber: b.roomNumber })).filter((x) => x.el);
+    try {
+      const progress = (i, n) => setPdfBusy(`กำลังสร้าง PDF ${i}/${n}… (อย่าเพิ่งปิดหน้านี้)`);
+      if (kind === 'zip') await downloadBillsZip(items, monthForFile, progress);
+      else await downloadBillsCombined(items, monthForFile, progress);
+    } catch (err) {
+      setError(`สร้าง PDF ไม่สำเร็จ: ${err.message || err}`);
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
   return (
     <div>
       <style>{`
@@ -485,14 +516,34 @@ export default function PrintBills() {
               ใส่เลขมิเตอร์ ก่อน/หลัง/หน่วย ให้อัตโนมัติ · ช่องจำนวนเงินเว้นว่างให้เจ้าของ/แอดมินคำนวณเอง · 2 บิลต่อ A4
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            disabled={loading || shown.length === 0}
-            className="rounded-lg bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
-          >
-            🖨️ พิมพ์ {shown.length} บิล ({sheets.length} แผ่น)
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => runPdf('zip')}
+              disabled={loading || shown.length === 0 || Boolean(pdfBusy)}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              title="ได้ไฟล์ .zip ข้างในเป็น PDF แยก 1 ไฟล์ต่อ 1 ห้อง เรียงตามเลขห้อง"
+            >
+              ⬇️ PDF แยกทีละห้อง ({shown.length} ไฟล์ · ZIP)
+            </button>
+            <button
+              type="button"
+              onClick={() => runPdf('combined')}
+              disabled={loading || shown.length === 0 || Boolean(pdfBusy)}
+              className="rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+              title="PDF ไฟล์เดียว 1 หน้าต่อ 1 ห้อง เรียงตามเลขห้อง"
+            >
+              ⬇️ PDF รวมไฟล์เดียว
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              disabled={loading || shown.length === 0}
+              className="rounded-lg bg-sky-600 px-5 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+            >
+              🖨️ พิมพ์ {shown.length} บิล ({sheets.length} แผ่น)
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
@@ -542,6 +593,9 @@ export default function PrintBills() {
           )}
         </div>
 
+        {pdfBusy && (
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">⏳ {pdfBusy}</div>
+        )}
         {error && <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
         {!loading && placeholderName && showNames && (
           <div className="mt-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-800">
@@ -565,7 +619,21 @@ export default function PrintBills() {
       ) : (
         <div className="mt-3 flex flex-col items-center gap-6 bg-slate-100 py-6 print:mt-0 print:block print:bg-white print:py-0">
           {sheets.map((pair, i) => (
-            <div key={i} className="bill-sheet shadow-md">
+            <div key={i} className="flex flex-col items-center gap-1.5 print:block">
+            <div className="flex gap-2 text-xs print:hidden">
+              {pair.filter(Boolean).map((b) => (
+                <button
+                  key={b.roomId}
+                  type="button"
+                  onClick={() => runOne(b)}
+                  disabled={Boolean(pdfBusy)}
+                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700 hover:bg-emerald-50 disabled:opacity-50"
+                >
+                  ⬇️ PDF ห้อง {b.roomNumber}
+                </button>
+              ))}
+            </div>
+            <div className="bill-sheet shadow-md">
               <div className="bill-half">
                 <Bill b={pair[0]} set={(f, v) => setField(pair[0].roomId, f, v)} />
               </div>
@@ -577,6 +645,7 @@ export default function PrintBills() {
                   </div>
                 </>
               )}
+            </div>
             </div>
           ))}
         </div>
