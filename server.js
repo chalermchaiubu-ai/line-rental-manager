@@ -114,6 +114,21 @@ function isPhoneLike(text) {
   return digits.length >= 9 && digits.length <= 10;
 }
 
+// Thai national ID: 13 digits with a mod-11 check digit.
+function isThaiIdLike(text) {
+  const d = normalizePhone(text);
+  if (!/^\d{13}$/.test(d)) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i += 1) sum += Number(d[i]) * (13 - i);
+  return (11 - (sum % 11)) % 10 === Number(d[12]);
+}
+
+// Same hash the web admin stores in tenants.id_card_hash (SHA-256 hex of the
+// 13 digits) — the ID number itself is never stored.
+function hashIdCard(text) {
+  return crypto.createHash('sha256').update(normalizePhone(text)).digest('hex');
+}
+
 function formatDateThai(isoDate) {
   if (!isoDate) return '-';
   const d = new Date(isoDate);
@@ -285,19 +300,32 @@ async function findActiveLeaseForTenant(tenantId) {
   return data || null;
 }
 
-// Tenants are created by the owner in Supabase (name, phone, etc.) with
-// line_user_id left NULL. The first time someone messages the bot, we ask
-// for their registered phone number and use it to link their LINE account
-// to that existing tenant row (never auto-creates a tenant).
-async function tryLinkByPhone(lineUserId, phoneText) {
-  const digits = normalizePhone(phoneText);
+// Tenants are created by the owner (web admin) with phone and/or national ID
+// and line_user_id left NULL. The first time someone messages the bot, we ask
+// for their registered phone number OR 13-digit ID card number and use it to
+// link their LINE account to that existing tenant row (never auto-creates a
+// tenant). Returns { tenant } on success, { ambiguous: true } when the value
+// matches more than one unlinked tenant (e.g. a shared placeholder phone) —
+// we refuse to guess — or null when nothing matches.
+async function tryLinkByPhoneOrId(lineUserId, text) {
+  const digits = normalizePhone(text);
   const { data: candidates } = await supabase
     .from('tenants')
     .select('*')
     .is('line_user_id', null)
     .eq('status', 'active');
 
-  const match = (candidates || []).find((t) => normalizePhone(t.phone) === digits);
+  const byId = isThaiIdLike(digits);
+  const idHash = byId ? hashIdCard(digits) : null;
+  const matches = (candidates || []).filter((t) =>
+    byId ? t.id_card_hash && t.id_card_hash === idHash : normalizePhone(t.phone) === digits
+  );
+  await logAudit(lineUserId, matches.length === 1 ? matches[0].id : null, 'line_link_attempt', 'tenant', matches.length === 1 ? matches[0].id : null, {
+    method: byId ? 'id_card' : 'phone',
+    matches: matches.length,
+  });
+  if (matches.length > 1) return { ambiguous: true };
+  const match = matches[0];
   if (!match) return null;
 
   const { data: updated } = await supabase
@@ -306,8 +334,11 @@ async function tryLinkByPhone(lineUserId, phoneText) {
     .eq('id', match.id)
     .select()
     .maybeSingle();
-  return updated || null;
+  return updated ? { tenant: updated } : null;
 }
+
+const LINK_PROMPT =
+  '👋 สวัสดีครับ/ค่ะ ยินดีต้อนรับสู่ หอพัก โชคดี เพลส\n\nเพื่อเชื่อม LINE กับห้องพักของคุณ กรุณาพิมพ์อย่างใดอย่างหนึ่ง:\n• เบอร์โทรศัพท์ที่ให้ไว้กับหอพัก (เช่น 0812345678)\n• หรือ เลขบัตรประชาชน 13 หลัก\n\n(พิมพ์เฉพาะตัวเลข ไม่ต้องเว้นวรรค)';
 
 // Every handler below re-derives tenant/room scope from `tenant`/`lease`,
 // which are themselves resolved ONLY from the LINE userId that LINE itself
@@ -1009,25 +1040,51 @@ app.post('/webhook', async (req, res) => {
     // hiccup can't take down the rest of the batch, and tenants never see a
     // raw stack trace — only a friendly Thai error message.
     try {
-      if (event.type !== 'message' && event.type !== 'postback') continue;
       const userId = event.source && event.source.userId;
       if (!userId) continue;
+
+      // Someone added the OA as a friend: greet linked tenants, prompt others.
+      if (event.type === 'follow') {
+        const t = await findTenantByLineId(userId);
+        await replyText(
+          userId,
+          t ? `ยินดีต้อนรับกลับครับ/ค่ะ คุณ${t.first_name || ''} กดเมนูด้านล่างของแชทเพื่อใช้งานได้เลย` : LINK_PROMPT
+        );
+        continue;
+      }
+      if (event.type !== 'message' && event.type !== 'postback') continue;
 
       const tenant = await findTenantByLineId(userId);
 
       // -------- Not linked yet: try to link by phone number, or ask for it
       if (!tenant) {
-        if (event.type === 'message' && event.message.type === 'text' && isPhoneLike(event.message.text)) {
-          const linked = await tryLinkByPhone(userId, event.message.text);
-          if (linked) {
-            await replyText(userId, `✅ เชื่อมบัญชี LINE สำเร็จ ยินดีต้อนรับคุณ${linked.first_name} ${linked.last_name}\n\nกดเมนูด้านล่างของแชทเพื่อเริ่มใช้งานครับ/ค่ะ`);
+        const typed = event.type === 'message' && event.message.type === 'text' ? event.message.text : '';
+        const looksLikeId = normalizePhone(typed).length === 13;
+        if (typed && (isPhoneLike(typed) || looksLikeId)) {
+          if (looksLikeId && !isThaiIdLike(typed)) {
+            await replyText(userId, '❌ เลขบัตรประชาชนไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง (13 หลัก) หรือพิมพ์เบอร์โทรศัพท์แทนครับ/ค่ะ');
+            continue;
+          }
+          const result = await tryLinkByPhoneOrId(userId, typed);
+          if (result && result.tenant) {
+            const t = result.tenant;
+            const lease = await findActiveLeaseForTenant(t.id);
+            const roomNo = lease?.rooms?.room_number;
+            await replyText(
+              userId,
+              `✅ เชื่อมบัญชี LINE สำเร็จ ยินดีต้อนรับคุณ${t.first_name || ''} ${t.last_name || ''}`.trim() +
+                (roomNo ? `\nห้องพักของคุณ: ${roomNo}` : '') +
+                '\n\nกดเมนูด้านล่างของแชทเพื่อ เช็กบิล · ส่งสลิป · แจ้งซ่อม · ดูประวัติชำระ · แจ้งย้ายออก · ติดต่อหอพัก ได้เลยครับ/ค่ะ'
+            );
+          } else if (result && result.ambiguous) {
+            await replyText(userId, '⚠️ ข้อมูลนี้ตรงกับผู้เช่ามากกว่า 1 คนในระบบ จึงยังเชื่อมให้อัตโนมัติไม่ได้ กรุณาลองพิมพ์เลขบัตรประชาชน 13 หลักแทน หรือติดต่อเจ้าของหอพักครับ/ค่ะ');
           } else {
-            await replyText(userId, '❌ ไม่พบเบอร์นี้ในระบบผู้เช่า กรุณาตรวจสอบเบอร์อีกครั้ง หรือติดต่อเจ้าของหอพักให้ลงทะเบียนให้ก่อนครับ/ค่ะ');
+            await replyText(userId, '❌ ไม่พบข้อมูลนี้ในระบบผู้เช่า (หรือเชื่อม LINE ไปแล้ว) กรุณาตรวจสอบอีกครั้ง หรือติดต่อเจ้าของหอพักให้ลงทะเบียนเบอร์โทร/เลขบัตรให้ก่อนครับ/ค่ะ');
           }
         } else if (event.type === 'message') {
-          await replyText(userId, '👋 สวัสดีครับ/ค่ะ ยินดีต้อนรับสู่ CLT Tenant Hub\n\nกรุณาพิมพ์เบอร์โทรศัพท์ที่ลงทะเบียนไว้กับเจ้าของหอพัก เพื่อเชื่อมบัญชี LINE ของคุณเข้ากับห้องพัก');
+          await replyText(userId, LINK_PROMPT);
         } else {
-          await replyText(userId, 'กรุณาเชื่อมบัญชีก่อนใช้เมนูนี้ครับ/ค่ะ พิมพ์เบอร์โทรศัพท์ที่ลงทะเบียนไว้กับเจ้าของหอพัก');
+          await replyText(userId, 'กรุณาเชื่อมบัญชีก่อนใช้เมนูนี้ครับ/ค่ะ\n\n' + LINK_PROMPT);
         }
         continue;
       }

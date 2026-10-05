@@ -45,7 +45,7 @@ export function can(role, permission) {
 export const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', icon: 'home' },
   { to: '/rooms', label: 'ห้องพัก', icon: 'building', permission: 'VIEW_ROOMS' },
-  { to: '/tenants', label: 'ผู้เช่า / สัญญา', icon: 'users', permission: 'VIEW_ROOMS' },
+  { to: '/tenants', label: 'ผู้เช่า / เชื่อม LINE', icon: 'users', permission: 'VIEW_ROOMS' },
   { to: '/meters', label: 'มิเตอร์', icon: 'gauge', permission: 'ENTER_METER' },
   { to: '/meter-summary', label: 'สรุป/พิมพ์ค่าน้ำไฟ', icon: 'receipt', permission: 'GENERATE_BILL' },
   { to: '/print-bills', label: 'พิมพ์บิล (ฟอร์ม)', icon: 'receipt', permission: 'GENERATE_BILL' },
