@@ -4,7 +4,7 @@ import { useAuth } from '../auth/AuthContext';
 import { can } from '../auth/permissions';
 
 const TABS = [
-  { key: 'pending', label: 'รอตรวจสอบ' },
+  { key: 'submitted', label: 'รอตรวจสอบ' }, // bot inserts 'submitted' (was 'pending' — LINE slips never showed)
   { key: 'verified', label: 'ยืนยันแล้ว' },
   { key: 'rejected', label: 'ปฏิเสธ' },
 ];
@@ -13,7 +13,7 @@ export default function PaymentVerification() {
   const { staff } = useAuth();
   const canVerify = can(staff?.role, 'VERIFY_PAYMENT');
 
-  const [tab, setTab] = useState('pending');
+  const [tab, setTab] = useState('submitted');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [rows, setRows] = useState([]);
@@ -175,7 +175,7 @@ export default function PaymentVerification() {
                 ส่งเมื่อ {p.created_at ? new Date(p.created_at).toLocaleString('th-TH') : '-'}
               </p>
 
-              {tab === 'pending' && canVerify && (
+              {tab === 'submitted' && canVerify && (
                 <div className="mt-3 flex gap-2">
                   <button
                     type="button"

@@ -169,7 +169,8 @@ export default function BillGeneration() {
             discount: preview.discount,
             late_fee: preview.lateFee,
             total_amount: preview.totalAmount,
-            status: 'pending',
+            // 'unpaid' = DB default / what the LINE bot looks for (not 'pending').
+            status: 'unpaid',
           })
           .select('id, bill_number')
           .single();

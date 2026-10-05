@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabaseClient';
+import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 
 // Friendly Thai labels for the room status values we've seen in the live
 // schema so far (DEPLOYMENT-STATUS.md confirms `status` is a free-text
@@ -16,8 +17,7 @@ const ROOM_STATUS_LABEL = {
 };
 
 function currentBillingMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return defaultReadingsMonth();
 }
 
 export default function Dashboard() {
@@ -127,7 +127,7 @@ export default function Dashboard() {
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-xs text-slate-400">
-            บิลเดือนนี้ {billSummary ? `(${billSummary.month})` : ''}
+            บิลรอบนี้ {billSummary ? `(ประจำเดือน${thaiMonthName(usageMonthOf(billSummary.month))})` : ''}
           </p>
           <p className="mt-1 text-2xl font-semibold text-slate-800">
             {loading || !billSummary ? '—' : billSummary.count}

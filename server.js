@@ -355,7 +355,7 @@ async function findOutstandingBill(tenantId) {
     .from('bills')
     .select('*')
     .eq('tenant_id', tenantId)
-    .in('status', ['unpaid', 'overdue', 'verifying'])
+    .in('status', ['unpaid', 'overdue', 'verifying', 'pending'])
     .order('billing_month', { ascending: false })
     .limit(1)
     .maybeSingle();
