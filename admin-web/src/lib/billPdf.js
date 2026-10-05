@@ -1,10 +1,13 @@
 // Turn the on-screen bills (PrintBills page) into PDF files in the browser.
 // Libraries are loaded on demand from jsDelivr so the app bundle stays small.
-//   html2canvas -> snapshot of one bill element
+//   html-to-image -> snapshot of one bill element. The browser itself lays out
+//                    the text (SVG foreignObject), so Thai text sits exactly
+//                    where it does on screen. (html2canvas drew Thai text too
+//                    low, overlapping the table lines.)
 //   jsPDF       -> one A5-landscape page per bill (half of A4, same as the cut paper)
 //   JSZip       -> all per-room PDFs in one .zip, named in room order
 const CDN = {
-  html2canvas: 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/+esm',
+  htmlToImage: 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/+esm',
   jspdf: 'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm',
   jszip: 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm',
 };
@@ -12,67 +15,23 @@ const CDN = {
 let libs = null;
 async function loadLibs() {
   if (libs) return libs;
-  const [h2c, jspdfMod, jszipMod] = await Promise.all([
-    import(/* @vite-ignore */ CDN.html2canvas),
+  const [hti, jspdfMod, jszipMod] = await Promise.all([
+    import(/* @vite-ignore */ CDN.htmlToImage),
     import(/* @vite-ignore */ CDN.jspdf),
     import(/* @vite-ignore */ CDN.jszip),
   ]);
   libs = {
-    html2canvas: h2c.default || h2c,
+    htmlToImage: hti,
     jsPDF: jspdfMod.jsPDF || jspdfMod.default?.jsPDF || jspdfMod.default,
     JSZip: jszipMod.default || jszipMod,
   };
   return libs;
 }
 
-// Editable bill fields are <input>s; canvas snapshots of inputs misalign text,
-// so in the snapshot copy each input is swapped for a plain span with its value.
-function inputsToText(liveEl, clonedEl) {
-  const live = liveEl.querySelectorAll('input.bill-input');
-  const cloned = clonedEl.querySelectorAll('input.bill-input');
-  cloned.forEach((input, i) => {
-    const span = clonedEl.ownerDocument.createElement('span');
-    span.textContent = live[i]?.value ?? '';
-    const cs = liveEl.ownerDocument.defaultView.getComputedStyle(live[i] || input);
-    span.style.display = 'block';
-    span.style.width = '100%';
-    span.style.textAlign = cs.textAlign;
-    span.style.fontWeight = cs.fontWeight;
-    span.style.fontSize = cs.fontSize;
-    span.style.lineHeight = cs.lineHeight;
-    span.style.minHeight = '1em';
-    input.replaceWith(span);
-  });
-  // แอร์/พัดลม tick boxes are <button>s, whose text html2canvas draws too high;
-  // swap them for a plain bordered box with the ✓ centred.
-  clonedEl.querySelectorAll('button').forEach((btn) => {
-    const box = clonedEl.ownerDocument.createElement('span');
-    box.textContent = btn.textContent;
-    Object.assign(box.style, {
-      display: 'inline-block',
-      width: '13px',
-      height: '13px',
-      lineHeight: '12px',
-      textAlign: 'center',
-      fontSize: '11px',
-      border: '1px solid #64748b',
-      margin: '0 2px',
-      verticalAlign: '-2px',
-    });
-    btn.replaceWith(box);
-  });
-}
-
 async function billToCanvas(el) {
-  const { html2canvas } = await loadLibs();
+  const { htmlToImage } = await loadLibs();
   if (document.fonts?.ready) await document.fonts.ready;
-  return html2canvas(el, {
-    scale: 2.5,
-    backgroundColor: '#ffffff',
-    useCORS: true,
-    logging: false,
-    onclone: (doc, clonedEl) => inputsToText(el, clonedEl),
-  });
+  return htmlToImage.toCanvas(el, { pixelRatio: 2.5, backgroundColor: '#ffffff' });
 }
 
 // A5 landscape (210 x 148 mm) with the bill centred inside an 8 mm margin.
