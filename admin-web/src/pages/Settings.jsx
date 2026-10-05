@@ -16,6 +16,7 @@ export default function Settings() {
   const [settings, setSettings] = useState([]); // [{ key, value, description, draft, saving }]
   const [staffUsers, setStaffUsers] = useState([]);
   const [togglingId, setTogglingId] = useState(null);
+  const [linkCode, setLinkCode] = useState(null); // { staffId, code, expires }
 
   async function load() {
     setLoading(true);
@@ -23,7 +24,7 @@ export default function Settings() {
     try {
       const [settingsRes, staffRes] = await Promise.all([
         supabase.from('settings').select('key, value, description, updated_at').order('key'),
-        supabase.from('staff_users').select('id, full_name, phone, role, active').order('full_name'),
+        supabase.from('staff_users').select('*').order('full_name'),
       ]);
       if (settingsRes.error) throw settingsRes.error;
       if (staffRes.error) throw staffRes.error;
@@ -80,6 +81,36 @@ export default function Settings() {
     } finally {
       setTogglingId(null);
     }
+  }
+
+  // One-time code for linking a staff member's LINE to receive alerts.
+  // The bot (server.js tryLinkStaff) matches "แอดมิน <code>" typed in the OA.
+  async function makeLinkCode(member) {
+    setError(null);
+    setMsg(null);
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expires = new Date(Date.now() + 15 * 60 * 1000);
+    const { error: err } = await supabase
+      .from('staff_users')
+      .update({ line_link_code: code, line_link_code_expires_at: expires.toISOString() })
+      .eq('id', member.id);
+    if (err) {
+      setError(
+        /line_link_code|line_user_id/.test(err.message || '')
+          ? 'ยังเปิดใช้การแจ้งเตือนไม่ได้ — ให้เจ้าของรันไฟล์ SQL 005_staff_line_notify.sql ใน Supabase ก่อน (ครั้งเดียว)'
+          : err.message
+      );
+      return;
+    }
+    setLinkCode({ staffId: member.id, code, expires });
+  }
+
+  async function unlinkLine(member) {
+    if (!window.confirm(`เลิกรับแจ้งเตือนทาง LINE ของ ${member.full_name || 'พนักงาน'}?`)) return;
+    const { error: err } = await supabase.from('staff_users').update({ line_user_id: null }).eq('id', member.id);
+    if (err) return setError(err.message);
+    setMsg('เลิกเชื่อม LINE แจ้งเตือนแล้ว');
+    load();
   }
 
   return (
@@ -143,13 +174,14 @@ export default function Settings() {
                   <th className="py-1.5">เบอร์โทร</th>
                   <th className="py-1.5">สิทธิ์</th>
                   <th className="py-1.5">สถานะ</th>
+                  <th className="py-1.5">LINE แจ้งเตือน</th>
                   {canManageUsers && <th className="py-1.5">ดำเนินการ</th>}
                 </tr>
               </thead>
               <tbody>
                 {staffUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={canManageUsers ? 5 : 4} className="py-3 text-center text-slate-400">
+                    <td colSpan={canManageUsers ? 6 : 5} className="py-3 text-center text-slate-400">
                       ยังไม่มีพนักงานในระบบ
                     </td>
                   </tr>
@@ -168,6 +200,32 @@ export default function Settings() {
                           {m.active ? 'ใช้งานอยู่' : 'ปิดใช้งาน'}
                         </span>
                       </td>
+                      <td className="py-2 text-xs">
+                        {m.line_user_id ? (
+                          <span className="rounded-full bg-emerald-100 px-2.5 py-1 font-semibold text-emerald-700">เชื่อมแล้ว</span>
+                        ) : (
+                          <span className="text-slate-400">ยังไม่เชื่อม</span>
+                        )}
+                        {canManageUsers && m.role !== 'staff' && (
+                          <span className="ml-2 inline-flex gap-1">
+                            <button type="button" onClick={() => makeLinkCode(m)} className="rounded-md border border-emerald-300 px-2 py-0.5 text-emerald-700 hover:bg-emerald-50">
+                              {m.line_user_id ? 'เชื่อมเครื่องใหม่' : 'รับแจ้งเตือนทาง LINE'}
+                            </button>
+                            {m.line_user_id && (
+                              <button type="button" onClick={() => unlinkLine(m)} className="rounded-md border border-slate-300 px-2 py-0.5 text-slate-600 hover:bg-slate-50">
+                                เลิกเชื่อม
+                              </button>
+                            )}
+                          </span>
+                        )}
+                        {linkCode?.staffId === m.id && (
+                          <div className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-emerald-900">
+                            เปิดแชท LINE หอพัก (@631prhjs) แล้วพิมพ์:
+                            <div className="my-1 text-lg font-bold tracking-widest">แอดมิน {linkCode.code}</div>
+                            ภายใน 15 นาที (ถึง {linkCode.expires.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}) แล้วกดรีเฟรชหน้านี้
+                          </div>
+                        )}
+                      </td>
                       {canManageUsers && (
                         <td className="py-2">
                           <button
@@ -185,6 +243,9 @@ export default function Settings() {
                 )}
               </tbody>
             </table>
+            <p className="mt-2 text-xs text-slate-500">
+              🔔 เจ้าของ/แอดมินที่เชื่อม LINE แล้ว จะได้รับแจ้งเตือนทันทีเมื่อผู้เช่าส่งสลิป แจ้งซ่อม หรือแจ้งย้ายออกผ่าน LINE
+            </p>
             {!canManageUsers && (
               <p className="mt-2 text-xs text-slate-400">เฉพาะเจ้าของเท่านั้นที่เปิด/ปิดใช้งานบัญชีพนักงานได้</p>
             )}

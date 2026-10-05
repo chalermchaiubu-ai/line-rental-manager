@@ -4,6 +4,7 @@ import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billin
 import { sortRooms } from '../lib/sortRooms';
 import { rawOr } from '../lib/meterText';
 import { downloadOneBill, downloadBillsZip, downloadBillsCombined } from '../lib/billPdf';
+import { saveBills, sendBillsToLine, billAmounts } from '../lib/saveBills';
 
 // ----------------------------------------------------------------------------
 // พิมพ์บิล (ฟอร์มจดหมายเวียน) — reproduces the owner's paper bill
@@ -292,6 +293,7 @@ export default function PrintBills() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [pdfBusy, setPdfBusy] = useState(null); // null | 'กำลังสร้าง PDF 3/28…'
+  const [saveReport, setSaveReport] = useState(null); // { title, rows: [{ roomNumber, ok, text }] }
   const [bills, setBills] = useState([]);
   const [placeholderName, setPlaceholderName] = useState(null);
   const [edits, setEdits] = useState(() => loadDraft(currentBillingMonth()));
@@ -374,7 +376,7 @@ export default function PrintBills() {
         const leases = leasesRes.data || [];
         const tenantIds = [...new Set(leases.map((l) => l.tenant_id).filter(Boolean))];
         const tenantsRes = tenantIds.length
-          ? await supabase.from('tenants').select('id, first_name, last_name').in('id', tenantIds)
+          ? await supabase.from('tenants').select('*').in('id', tenantIds)
           : { data: [] };
         if (tenantsRes.error) throw tenantsRes.error;
 
@@ -405,6 +407,7 @@ export default function PrintBills() {
             isNumbered: /^\d+$/.test(String(room.room_number).trim()),
             kind: roomKind(typeById.get(room.room_type_id)),
             tenantName: nm && nm !== placeholder ? nm : '',
+            hasLine: Boolean(t?.line_user_id),
             hasMeter: Boolean(m),
             // as typed, leading zeros kept (e.g. "054321")
             eCur: m ? rawOr(m.electric_current_raw, m.electric_current) : '',
@@ -477,6 +480,59 @@ export default function PrintBills() {
     }
   }
 
+  // ---- Save to system (+ optionally send via LINE) ----
+  async function runSave(list, alsoSend) {
+    setError(null);
+    setSaveReport(null);
+    const withMoney = list.filter((b) => billAmounts(b).hasAny);
+    if (withMoney.length === 0) {
+      setError('ยังไม่มีบิลที่ใส่จำนวนเงิน — ใส่ยอดเงินในบิลก่อน แล้วค่อยกดบันทึก');
+      return;
+    }
+    const skipped = list.length - withMoney.length;
+    const ok = window.confirm(
+      `บันทึกบิล ${withMoney.length} ห้องเข้าระบบ${alsoSend ? ' และส่งเข้า LINE ผู้เช่าที่เชื่อมแล้ว' : ''}?\n\n` +
+        `ประจำเดือน: ${shown[0]?.month || monthLabel}\nวันที่บิล: ${dateLabel}\nครบกำหนดชำระ: 05/${billingMonth.slice(5, 7)}/${Number(billingMonth.slice(0, 4)) + 543}` +
+        (skipped ? `\n\n(ข้าม ${skipped} ห้องที่ยังไม่ใส่จำนวนเงิน)` : '') +
+        (alsoSend ? '\n\n⚠️ การส่ง LINE ใช้โควต้าข้อความของ OA และผู้เช่าจะเห็นทันที' : '')
+    );
+    if (!ok) return;
+    try {
+      const saved = await saveBills(withMoney, { readingsMonth: billingMonth, issueDate: billDate }, (i, n, room) =>
+        setPdfBusy(`กำลังบันทึกบิล ${i}/${n} (ห้อง ${room})…`)
+      );
+      const rows = saved.map((r) => ({ roomNumber: r.roomNumber, ok: r.ok, text: r.ok ? 'บันทึกแล้ว' : r.reason }));
+      if (alsoSend) {
+        const ids = saved.filter((r) => r.ok).map((r) => r.billId);
+        if (ids.length) {
+          setPdfBusy(`กำลังส่ง LINE ${ids.length} ห้อง… (ถ้าระบบ LINE หลับอยู่ อาจรอได้ถึง 1 นาที)`);
+          try {
+            const sent = await sendBillsToLine(ids);
+            const byId = new Map(sent.map((x) => [x.bill_id, x]));
+            for (const r of saved) {
+              if (!r.ok) continue;
+              const x = byId.get(r.billId);
+              const row = rows.find((y) => y.roomNumber === r.roomNumber);
+              row.text = x?.ok ? 'บันทึกแล้ว · ส่ง LINE แล้ว ✅' : `บันทึกแล้ว · ไม่ได้ส่ง LINE: ${x?.reason || '-'}`;
+              row.ok = Boolean(x?.ok);
+              row.partial = !x?.ok;
+            }
+          } catch (err) {
+            setError(`บันทึกบิลแล้ว แต่ส่ง LINE ไม่สำเร็จ: ${err.message}`);
+          }
+        }
+      }
+      setSaveReport({
+        title: alsoSend ? 'ผลการบันทึกและส่ง LINE' : 'ผลการบันทึกบิลเข้าระบบ',
+        rows,
+      });
+    } catch (err) {
+      setError(`บันทึกไม่สำเร็จ: ${err.message || err}`);
+    } finally {
+      setPdfBusy(null);
+    }
+  }
+
   async function runPdf(kind) {
     setError(null);
     const items = shown.map((b) => ({ el: billEl(b.roomId), roomNumber: b.roomNumber })).filter((x) => x.el);
@@ -517,6 +573,24 @@ export default function PrintBills() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => runSave(shown, false)}
+              disabled={loading || shown.length === 0 || Boolean(pdfBusy)}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-50"
+              title="บันทึกยอดในบิลเป็นบิลจริงในระบบ — ผู้เช่ากดเช็กบิล/ส่งสลิปใน LINE ได้ และขึ้นในหน้าการชำระเงิน/รายงาน"
+            >
+              💾 บันทึกบิลเข้าระบบ
+            </button>
+            <button
+              type="button"
+              onClick={() => runSave(shown, true)}
+              disabled={loading || shown.length === 0 || Boolean(pdfBusy)}
+              className="rounded-lg bg-[#06C755] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+              title="บันทึกเข้าระบบ แล้วส่งบิลเข้า LINE ของผู้เช่าที่เชื่อม LINE แล้ว"
+            >
+              📲 บันทึก + ส่ง LINE ({shown.filter((b) => b.hasLine).length} ห้องที่เชื่อม)
+            </button>
             <button
               type="button"
               onClick={() => runPdf('zip')}
@@ -593,6 +667,23 @@ export default function PrintBills() {
           )}
         </div>
 
+        {saveReport && (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold text-slate-800">
+                {saveReport.title}: สำเร็จ {saveReport.rows.filter((r) => r.ok).length} / {saveReport.rows.length} ห้อง
+              </p>
+              <button type="button" onClick={() => setSaveReport(null)} className="text-xs text-slate-400 hover:text-slate-600">ปิด</button>
+            </div>
+            <div className="mt-2 grid gap-x-6 gap-y-0.5 text-xs sm:grid-cols-2 lg:grid-cols-3">
+              {saveReport.rows.map((r) => (
+                <p key={r.roomNumber} className={r.ok ? 'text-emerald-700' : r.partial ? 'text-amber-700' : 'text-red-600'}>
+                  ห้อง {r.roomNumber}: {r.text}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
         {pdfBusy && (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">⏳ {pdfBusy}</div>
         )}
@@ -630,6 +721,18 @@ export default function PrintBills() {
                   className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700 hover:bg-emerald-50 disabled:opacity-50"
                 >
                   ⬇️ PDF ห้อง {b.roomNumber}
+                </button>
+              ))}
+              {pair.filter(Boolean).map((b) => (
+                <button
+                  key={`line-${b.roomId}`}
+                  type="button"
+                  onClick={() => runSave([b], true)}
+                  disabled={Boolean(pdfBusy) || !b.hasLine}
+                  title={b.hasLine ? 'บันทึกบิลห้องนี้เข้าระบบ แล้วส่งเข้า LINE ผู้เช่า' : 'ผู้เช่าห้องนี้ยังไม่เชื่อม LINE (ไปที่หน้า ผู้เช่า / เชื่อม LINE)'}
+                  className="rounded-md border border-[#06C755] bg-white px-2.5 py-1 text-[#06a347] hover:bg-green-50 disabled:border-slate-200 disabled:text-slate-300"
+                >
+                  📲 ส่ง LINE ห้อง {b.roomNumber}
                 </button>
               ))}
             </div>

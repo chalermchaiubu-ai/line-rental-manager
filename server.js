@@ -56,6 +56,40 @@ app.use((req, res, next) => {
 });
 // ============================================================================
 
+// ============ Admin API (called by the web admin) ===========================
+// The web admin cannot hold the LINE channel token, so it asks this server to
+// push LINE messages. Every call must carry the staff member's Supabase Auth
+// access token; requireStaff() verifies it with Supabase and checks the
+// staff_users role. CORS is limited to the web admin's origin.
+const ADMIN_WEB_ORIGINS = (process.env.ADMIN_WEB_ORIGIN || 'https://clt-tenant-hub-admin.onrender.com')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use('/api/admin', (req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ADMIN_WEB_ORIGINS.includes(origin)) {
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+async function requireStaff(req, roles) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!token) return null;
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) return null;
+  const uid = data.user.id;
+  const { data: rows } = await supabase.from('staff_users').select('*').or(`id.eq.${uid},auth_user_id.eq.${uid}`).limit(1);
+  const staff = rows && rows[0];
+  if (!staff || staff.active === false || !roles.includes(staff.role)) return null;
+  return staff;
+}
+// ============================================================================
+
 function verifyLineSignature(body, signature) {
   const hash = crypto
     .createHmac('sha256', LINE_CHANNEL_SECRET)
@@ -76,8 +110,10 @@ async function sendLineMessage(userId, messages) {
         },
       }
     );
+    return true;
   } catch (error) {
     console.error('❌ Error sending LINE message:', error.response?.data || error.message);
+    return false;
   }
 }
 
@@ -180,6 +216,27 @@ const BILL_STATUS_TH = {
   overdue: 'เกินกำหนดชำระ',
   cancelled: 'ยกเลิก',
 };
+
+const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+// The month a bill is FOR. Since 2026-10 bills are issued on the 30th and
+// stored under the following billing_month (Sep usage = '2026-10'), so for a
+// bill issued on day 25+ the usage month is the issue month. Older bills
+// (issued ~20th) used billing_month = usage month.
+function billUsageMonthLabel(bill) {
+  let y;
+  let m;
+  const issue = bill.issue_date ? String(bill.issue_date).slice(0, 10) : '';
+  if (issue && Number(issue.slice(8, 10)) >= 25) {
+    y = Number(issue.slice(0, 4));
+    m = Number(issue.slice(5, 7));
+  } else if (bill.billing_month) {
+    y = Number(String(bill.billing_month).slice(0, 4));
+    m = Number(String(bill.billing_month).slice(5, 7));
+  }
+  if (!y || !m) return bill.billing_month || '';
+  return `${TH_MONTHS[m - 1]} ${y + 543}`;
+}
 
 const ITEM_TYPE_TH = {
   rent: 'ค่าเช่าห้อง',
@@ -337,6 +394,53 @@ async function tryLinkByPhoneOrId(lineUserId, text) {
   return updated ? { tenant: updated } : null;
 }
 
+// ----------------------------------------------------------------------------
+// Staff (owner/admin) LINE notifications. A staff member links their LINE by
+// typing "แอดมิน <6-digit code>" (code generated on the web admin's ตั้งค่า
+// page, stored in staff_users.line_link_code, valid 15 minutes).
+// ----------------------------------------------------------------------------
+async function findStaffByLineId(lineUserId) {
+  const { data } = await supabase.from('staff_users').select('*').eq('line_user_id', lineUserId).limit(1);
+  return (data && data[0]) || null;
+}
+
+async function tryLinkStaff(lineUserId, code) {
+  const { data } = await supabase.from('staff_users').select('*').eq('line_link_code', code).limit(1);
+  const staff = data && data[0];
+  if (!staff || staff.active === false) return null;
+  if (staff.line_link_code_expires_at && new Date(staff.line_link_code_expires_at) < new Date()) return null;
+  const { data: updated } = await supabase
+    .from('staff_users')
+    .update({ line_user_id: lineUserId, line_link_code: null, line_link_code_expires_at: null })
+    .eq('id', staff.id)
+    .select()
+    .maybeSingle();
+  return updated || null;
+}
+
+async function notifyStaff(text) {
+  try {
+    const { data } = await supabase
+      .from('staff_users')
+      .select('line_user_id, role, active')
+      .not('line_user_id', 'is', null);
+    const targets = (data || []).filter((s) => s.active !== false && ['owner', 'admin'].includes(s.role));
+    for (const s of targets) await sendLineMessage(s.line_user_id, { type: 'text', text });
+  } catch (e) {
+    // staff_users.line_user_id may not exist yet (SQL 005 not run) — never
+    // let a notification failure break the tenant's flow.
+    console.error('❌ notifyStaff:', e.message);
+  }
+}
+
+async function roomLabel(roomId) {
+  if (!roomId) return '-';
+  const { data } = await supabase.from('rooms').select('room_number').eq('id', roomId).maybeSingle();
+  return data?.room_number || '-';
+}
+
+const tenantName = (t) => `${t?.first_name || ''} ${t?.last_name || ''}`.trim() || '-';
+
 const LINK_PROMPT =
   '👋 สวัสดีครับ/ค่ะ ยินดีต้อนรับสู่ หอพัก โชคดี เพลส\n\nเพื่อเชื่อม LINE กับห้องพักของคุณ กรุณาพิมพ์อย่างใดอย่างหนึ่ง:\n• เบอร์โทรศัพท์ที่ให้ไว้กับหอพัก (เช่น 0812345678)\n• หรือ เลขบัตรประชาชน 13 หลัก\n\n(พิมพ์เฉพาะตัวเลข ไม่ต้องเว้นวรรค)';
 
@@ -397,7 +501,16 @@ function buildBillFlexMessage(room, bill, items) {
     type: 'box',
     layout: 'horizontal',
     contents: [
-      { type: 'text', text: ITEM_TYPE_TH[it.item_type] || it.description, size: 'sm', color: '#555555', flex: 4 },
+      {
+        type: 'text',
+        text:
+          (it.item_type === 'other' && it.description ? it.description : ITEM_TYPE_TH[it.item_type] || it.description) +
+          ((it.item_type === 'electricity' || it.item_type === 'water') && it.quantity != null ? ` (${Number(it.quantity).toLocaleString('th-TH', { maximumFractionDigits: 2 })} หน่วย)` : ''),
+        size: 'sm',
+        color: '#555555',
+        flex: 4,
+        wrap: true,
+      },
       { type: 'text', text: `${formatBaht(it.amount)} บ.`, size: 'sm', color: '#111111', align: 'end', flex: 2 },
     ],
   }));
@@ -410,8 +523,9 @@ function buildBillFlexMessage(room, bill, items) {
       backgroundColor: '#2E7D32',
       paddingAll: '16px',
       contents: [
-        { type: 'text', text: 'บิลค่าเช่าประจำเดือน', color: '#FFFFFF', size: 'sm' },
-        { type: 'text', text: `ห้อง ${room.room_number}  •  ${bill.billing_month}`, color: '#FFFFFF', size: 'xl', weight: 'bold' },
+        { type: 'text', text: 'หอพัก โชคดี เพลส · ใบแจ้งหนี้', color: '#FFFFFF', size: 'sm' },
+        { type: 'text', text: `ห้อง ${room.room_number}`, color: '#FFFFFF', size: 'xl', weight: 'bold' },
+        { type: 'text', text: `ประจำเดือน ${billUsageMonthLabel(bill)}`, color: '#FFFFFF', size: 'sm' },
       ],
     },
     body: {
@@ -567,6 +681,9 @@ async function finalizeSlipSubmission(userId, tenant, context, event) {
 
   await clearConversationState(userId);
   await logAudit(userId, tenant.id, 'payment_submitted', 'bill', bill.id, { amount: bill.total_amount });
+  await notifyStaff(
+    `💳 มีสลิปใหม่รอตรวจสอบ\nห้อง ${await roomLabel(bill.room_id)} · ${tenantName(tenant)}\nบิล: ${bill.bill_number || bill.billing_month}\nยอด: ${formatBaht(bill.total_amount)} บาท\n\nตรวจได้ที่เว็บหลังบ้าน → การชำระเงิน`
+  );
 
   await replyText(
     userId,
@@ -657,6 +774,9 @@ async function finalizeMaintenanceRequest(userId, tenant, lease, context, event)
     category: context.category,
     ticket_number: row?.ticket_number,
   });
+  await notifyStaff(
+    `🔧 แจ้งซ่อมใหม่ ${row?.ticket_number || ''}\nห้อง ${await roomLabel(lease.room_id)} · ${tenantName(tenant)}\nประเภท: ${label}\nรายละเอียด: ${context.description || '-'}${imageUrl ? '\n(มีรูปแนบ)' : ''}\n\nดูได้ที่เว็บหลังบ้าน → งานซ่อม`
+  );
 
   await replyText(
     userId,
@@ -684,6 +804,7 @@ async function handleReportRepairLegacy(userId, tenant, lease, description) {
     .select()
     .maybeSingle();
   await logAudit(userId, tenant.id, 'maintenance_created', 'maintenance_request', row?.id, { ticket_number: row?.ticket_number, source: 'legacy_text' });
+  await notifyStaff(`🔧 แจ้งซ่อมใหม่ ${row?.ticket_number || ''}\nห้อง ${await roomLabel(lease.room_id)} · ${tenantName(tenant)}\nรายละเอียด: ${description || '-'}\n\nดูได้ที่เว็บหลังบ้าน → งานซ่อม`);
   await replyText(userId, `✅ แจ้งซ่อมสำเร็จ (เลขที่: ${row?.ticket_number || '-'})\nเจ้าของ/ช่างจะตรวจสอบและติดต่อกลับเร็ว ๆ นี้ครับ/ค่ะ`);
 }
 
@@ -769,6 +890,9 @@ async function handleMoveOutConfirm(userId, tenant, lease, context) {
 
   await clearConversationState(userId);
   await logAudit(userId, tenant.id, 'move_out_requested', 'move_out_request', row?.id, { requested_move_out_date: context.date });
+  await notifyStaff(
+    `🚚 แจ้งย้ายออก\nห้อง ${await roomLabel(lease.room_id)} · ${tenantName(tenant)}\nวันที่จะย้าย: ${formatDateThaiBE(context.date)}${context.reason ? `\nเหตุผล: ${context.reason}` : ''}\n\nอนุมัติได้ที่เว็บหลังบ้าน → ย้ายออก`
+  );
 
   await replyText(
     userId,
@@ -1054,7 +1178,28 @@ app.post('/webhook', async (req, res) => {
       }
       if (event.type !== 'message' && event.type !== 'postback') continue;
 
+      // Staff linking LINE for notifications: "แอดมิน 123456"
+      const rawText = event.type === 'message' && event.message.type === 'text' ? event.message.text.trim() : '';
+      const staffCode = rawText.match(/^(?:แอดมิน|admin)\s*(\d{6})$/i);
+      if (staffCode) {
+        const staff = await tryLinkStaff(userId, staffCode[1]);
+        await replyText(
+          userId,
+          staff
+            ? `✅ เชื่อม LINE รับแจ้งเตือนสำหรับ ${staff.full_name || 'แอดมิน'} แล้ว\nจะได้รับแจ้งเมื่อมีสลิปใหม่ แจ้งซ่อม หรือแจ้งย้ายออก`
+            : '❌ รหัสไม่ถูกต้องหรือหมดอายุแล้ว กรุณาสร้างรหัสใหม่ที่เว็บหลังบ้าน → ตั้งค่า'
+        );
+        continue;
+      }
+
       const tenant = await findTenantByLineId(userId);
+      if (!tenant) {
+        const staffUser = await findStaffByLineId(userId).catch(() => null);
+        if (staffUser) {
+          await replyText(userId, `บัญชีนี้เชื่อมเป็น LINE รับแจ้งเตือนของ ${staffUser.full_name || 'แอดมิน'} ครับ/ค่ะ\nจัดการงานได้ที่เว็บหลังบ้าน`);
+          continue;
+        }
+      }
 
       // -------- Not linked yet: try to link by phone number, or ask for it
       if (!tenant) {
@@ -1238,6 +1383,46 @@ app.get('/admin/richmenu/delete', async (req, res) => {
   } catch (err) {
     console.error('❌ richmenu delete error:', err.response?.data || err.message);
     res.status(500).json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// POST /api/admin/send-bills  { bill_ids: [...] }  — owner/admin only.
+// Pushes each bill as a Flex message to the tenant's LINE (if linked).
+// ----------------------------------------------------------------------------
+app.post('/api/admin/send-bills', async (req, res) => {
+  try {
+    const staff = await requireStaff(req, ['owner', 'admin']);
+    if (!staff) return res.status(403).json({ ok: false, error: 'ไม่มีสิทธิ์ (ต้องล็อกอินเป็นเจ้าของ/แอดมิน)' });
+    const ids = Array.isArray(req.body?.bill_ids) ? req.body.bill_ids.slice(0, 100) : [];
+    const results = [];
+    for (const id of ids) {
+      const { data: bill } = await supabase.from('bills').select('*').eq('id', id).maybeSingle();
+      if (!bill) {
+        results.push({ bill_id: id, ok: false, reason: 'ไม่พบบิล' });
+        continue;
+      }
+      const [{ data: room }, { data: tenant }, { data: items }] = await Promise.all([
+        supabase.from('rooms').select('room_number').eq('id', bill.room_id).maybeSingle(),
+        supabase.from('tenants').select('id, first_name, line_user_id').eq('id', bill.tenant_id).maybeSingle(),
+        supabase.from('bill_items').select('*').eq('bill_id', bill.id).order('created_at', { ascending: true }),
+      ]);
+      if (!tenant?.line_user_id) {
+        results.push({ bill_id: id, room: room?.room_number, ok: false, reason: 'ผู้เช่ายังไม่เชื่อม LINE' });
+        continue;
+      }
+      const flex = buildBillFlexMessage(room || { room_number: '-' }, bill, items || []);
+      const sent = await sendLineMessage(
+        tenant.line_user_id,
+        withQuickReply(flex, [qrPostback('💳 ส่งสลิปตอนนี้', 'action=submit_slip', '💳 ส่งสลิปตอนนี้')])
+      );
+      await logAudit(tenant.line_user_id, tenant.id, sent ? 'bill_sent_line' : 'bill_send_failed', 'bill', bill.id, { by_staff: staff.id });
+      results.push({ bill_id: id, room: room?.room_number, ok: sent, reason: sent ? null : 'LINE ส่งไม่สำเร็จ (โควต้าข้อความหมด หรือผู้เช่าบล็อก OA)' });
+    }
+    res.json({ ok: true, results });
+  } catch (err) {
+    console.error('❌ send-bills error:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
