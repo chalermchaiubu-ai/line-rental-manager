@@ -52,8 +52,11 @@ function itemRows(billId, b, a) {
     final_amount: amount,
   });
   const rows = [row('rent', b.kind === 'air' ? 'ค่าเช่าห้อง (ห้องแอร์)' : b.kind === 'fan' ? 'ค่าเช่าห้อง (ห้องพัดลม)' : 'ค่าเช่าห้อง', 1, a.rent)];
-  if (a.elec || eUnits) rows.push(row('electricity', 'ค่าไฟฟ้า', eUnits ?? 0, a.elec));
-  if (a.water || wUnits) rows.push(row('water', 'ค่าน้ำประปา', wUnits ?? 0, a.water));
+  // Keep electricity / water rows even when they are 0 (owner types "0"), so
+  // the saved bill shows 0 instead of a blank on every device and in LINE.
+  const typed = (v) => parseAmount(v) !== null;
+  if (typed(b.amtElec) || eUnits !== null) rows.push(row('electricity', 'ค่าไฟฟ้า', eUnits ?? 0, a.elec));
+  if (typed(b.amtWater) || wUnits !== null) rows.push(row('water', 'ค่าน้ำประปา', wUnits ?? 0, a.water));
   if (a.fine) rows.push(row('late_fee', `ค่าปรับ${b.fineDays ? ` ${b.fineDays} วัน` : ''}`, 1, a.fine));
   if (a.other) rows.push(row('other', b.otherDesc || 'อื่น ๆ', 1, a.other));
   return rows;

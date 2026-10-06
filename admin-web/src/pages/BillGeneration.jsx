@@ -193,7 +193,7 @@ export default function BillGeneration() {
       if (oldErr) throw oldErr;
 
       const itemRows = preview.items
-        .filter((item) => item.amount !== 0 || item.type === 'rent')
+        .filter((item) => item.amount !== 0 || item.type === 'rent' || item.units != null)
         .map((item) => ({
           bill_id: billId,
           item_type: item.type,
