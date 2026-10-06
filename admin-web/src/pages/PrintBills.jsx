@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { defaultReadingsMonth, usageMonthOf, thaiMonthName } from '../lib/billingMonth';
 import { sortRooms } from '../lib/sortRooms';
 import { rawOr } from '../lib/meterText';
-import { downloadOneBill, downloadBillsZip, downloadBillsCombined } from '../lib/billPdf';
+import { downloadOneBill, downloadBillsZip, downloadBillsCombined, shareOneBill, shareFile, canShareFiles } from '../lib/billPdf';
 import { saveBills, sendBillsToLine, billAmounts } from '../lib/saveBills';
 
 // ----------------------------------------------------------------------------
@@ -256,6 +256,81 @@ function Bill({ b, set }) {
   );
 }
 
+// On a phone in portrait the A4 sheet (194 mm ≈ 733 px) is wider than the
+// screen. Scale it down to fit the width so the whole bill is visible; the
+// real size is kept for printing and for the PDF snapshot (the bill element
+// itself is not transformed, only this wrapper).
+const SHEET_PX = 733;
+function FitToWidth({ enabled, children }) {
+  const outer = useRef(null);
+  const inner = useRef(null);
+  const [scale, setScale] = useState(1);
+  const [h, setH] = useState(null);
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setScale(1);
+      setH(null);
+      return undefined;
+    }
+    const measure = () => {
+      const w = outer.current?.clientWidth || SHEET_PX;
+      const sc = Math.min(1, (w - 8) / SHEET_PX);
+      setScale(sc);
+      setH(inner.current ? inner.current.offsetHeight * sc : null);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    if (outer.current) ro.observe(outer.current);
+    return () => ro.disconnect();
+  }, [enabled]);
+  const on = enabled && scale < 1;
+  return (
+    <div
+      ref={outer}
+      className={on ? 'fit-outer w-full overflow-hidden' : enabled ? 'w-full' : ''}
+      style={on && h ? { height: h } : undefined}
+    >
+      <div
+        ref={inner}
+        className={on ? 'fit-inner' : enabled ? 'flex justify-center' : ''}
+        style={on ? { width: SHEET_PX, transform: `scale(${scale})`, transformOrigin: 'top left' } : undefined}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const MONEY_KEYS = ['amtRent', 'amtElec', 'amtWater', 'amtFine', 'amtOther', 'otherDesc', 'total'];
+
+// Turn a bill saved in the system (bills + bill_items) back into the form
+// fields, so every device (phone, PC) shows the same saved amounts.
+function savedFields(bill, items) {
+  const f = {};
+  const add = (k, v) => {
+    f[k] = showNum((toNumber(f[k]) ?? 0) + Number(v || 0));
+  };
+  for (const it of items) {
+    const amt = Number(it.final_amount ?? it.amount ?? 0);
+    const desc = it.description || '';
+    if (it.item_type === 'rent') add('amtRent', amt);
+    else if (it.item_type === 'electricity') add('amtElec', amt);
+    else if (it.item_type === 'water') add('amtWater', amt);
+    else if (it.item_type === 'late_fee' || desc.startsWith('ค่าปรับ')) {
+      add('amtFine', amt);
+      const d = desc.match(/(\d+(?:\.\d+)?)\s*วัน/);
+      if (d) f.fineDays = d[1];
+    } else {
+      add('amtOther', amt);
+      if (desc && desc !== 'อื่น ๆ') f.otherDesc = desc;
+    }
+  }
+  const sum = ['amtRent', 'amtElec', 'amtWater', 'amtFine', 'amtOther'].reduce((a, k) => a + (toNumber(f[k]) ?? 0), 0);
+  const total = Number(bill.total_amount || 0);
+  if (items.length === 0 || Math.abs(total - sum) > 0.009) f.total = money(total);
+  return f;
+}
+
 // Per-month edits are kept in this browser only (they never touch the
 // database), so a refresh doesn't lose work. Wrapped in try/catch because
 // storage can be unavailable (private mode etc.).
@@ -297,6 +372,16 @@ export default function PrintBills() {
   const [bills, setBills] = useState([]);
   const [placeholderName, setPlaceholderName] = useState(null);
   const [edits, setEdits] = useState(() => loadDraft(currentBillingMonth()));
+  const [reloadKey, setReloadKey] = useState(0);
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 800);
+  const [fitMode, setFitMode] = useState(true);
+  const [shareReady, setShareReady] = useState(null); // File waiting for a second tap (iPhone)
+  const canShare = useMemo(() => canShareFiles(), []);
+  useEffect(() => {
+    const onResize = () => setIsNarrow(window.innerWidth < 800);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     setEdits(loadDraft(billingMonth));
@@ -362,7 +447,7 @@ export default function PrintBills() {
       setLoading(true);
       setError(null);
       try {
-        const [roomsRes, typesRes, leasesRes, metersRes] = await Promise.all([
+        const [roomsRes, typesRes, leasesRes, metersRes, billsRes] = await Promise.all([
           supabase.from('rooms').select('id, room_number, room_type_id'),
           supabase.from('room_types').select('id, name'),
           supabase.from('leases').select('room_id, tenant_id').eq('status', 'active'),
@@ -370,8 +455,20 @@ export default function PrintBills() {
             .from('meter_readings')
             .select('*')
             .eq('billing_month', billingMonth),
+          supabase.from('bills').select('id, room_id, status, total_amount').eq('billing_month', billingMonth),
         ]);
-        for (const r of [roomsRes, typesRes, leasesRes, metersRes]) if (r.error) throw r.error;
+        for (const r of [roomsRes, typesRes, leasesRes, metersRes, billsRes]) if (r.error) throw r.error;
+        const savedBillsList = (billsRes.data || []).filter((x) => x.status !== 'cancelled');
+        const itemsRes = savedBillsList.length
+          ? await supabase.from('bill_items').select('*').in('bill_id', savedBillsList.map((x) => x.id))
+          : { data: [] };
+        if (itemsRes.error) throw itemsRes.error;
+        const itemsByBill = new Map();
+        for (const it of itemsRes.data || []) {
+          if (!itemsByBill.has(it.bill_id)) itemsByBill.set(it.bill_id, []);
+          itemsByBill.get(it.bill_id).push(it);
+        }
+        const savedByRoom = new Map(savedBillsList.map((x) => [x.room_id, x]));
 
         const leases = leasesRes.data || [];
         const tenantIds = [...new Set(leases.map((l) => l.tenant_id).filter(Boolean))];
@@ -401,7 +498,10 @@ export default function PrintBills() {
           const t = lease ? tenantById.get(lease.tenant_id) : null;
           const nm = t ? `${t.first_name || ''} ${t.last_name || ''}`.trim() : '';
           const m = meterByRoom.get(room.id);
+          const sb = savedByRoom.get(room.id);
           return {
+            ...(sb ? savedFields(sb, itemsByBill.get(sb.id) || []) : {}),
+            saved: sb ? { id: sb.id, status: sb.status, total: Number(sb.total_amount || 0) } : null,
             roomId: room.id,
             roomNumber: room.room_number,
             isNumbered: /^\d+$/.test(String(room.room_number).trim()),
@@ -432,7 +532,7 @@ export default function PrintBills() {
     return () => {
       cancelled = true;
     };
-  }, [billingMonth]);
+  }, [billingMonth, reloadKey]);
 
   const monthLabel = thaiMonth(billMonthYm);
   const dateLabel = thaiDate(billDate);
@@ -472,9 +572,11 @@ export default function PrintBills() {
     setError(null);
     setPdfBusy(`กำลังสร้าง PDF ห้อง ${b.roomNumber}…`);
     try {
-      await downloadOneBill(billEl(b.roomId), b.roomNumber, monthForFile);
+      if (canShare) await shareOneBill(billEl(b.roomId), b.roomNumber, monthForFile);
+      else await downloadOneBill(billEl(b.roomId), b.roomNumber, monthForFile);
     } catch (err) {
-      setError(`สร้าง PDF ไม่สำเร็จ: ${err.message || err}`);
+      if (err?.code === 'NEED_TAP') setShareReady({ file: err.file, roomNumber: b.roomNumber });
+      else setError(`สร้าง PDF ไม่สำเร็จ: ${err.message || err}`);
     } finally {
       setPdfBusy(null);
     }
@@ -526,6 +628,28 @@ export default function PrintBills() {
         title: alsoSend ? 'ผลการบันทึกและส่ง LINE' : 'ผลการบันทึกบิลเข้าระบบ',
         rows,
       });
+      // The system now holds these amounts: drop this device's local copies
+      // so every device shows the saved values, then reload from the system.
+      const savedRoomIds = new Set(
+        saved.filter((r) => r.ok).map((r) => withMoney.find((b) => b.roomNumber === r.roomNumber)?.roomId).filter(Boolean)
+      );
+      if (savedRoomIds.size) {
+        setEdits((prev) => {
+          const next = {};
+          for (const [k, v] of Object.entries(prev)) {
+            if (!savedRoomIds.has(k)) {
+              next[k] = v;
+              continue;
+            }
+            const rest = { ...(v || {}) };
+            for (const key of MONEY_KEYS) delete rest[key];
+            next[k] = rest;
+          }
+          saveDraft(billingMonth, next);
+          return next;
+        });
+        setReloadKey((x) => x + 1);
+      }
     } catch (err) {
       setError(`บันทึกไม่สำเร็จ: ${err.message || err}`);
     } finally {
@@ -561,6 +685,8 @@ export default function PrintBills() {
           .bill-sheet { break-after: page; page-break-after: always; box-shadow: none !important; margin: 0 !important; }
           .bill-sheet:last-child { break-after: auto; page-break-after: auto; }
           * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .fit-outer { height: auto !important; overflow: visible !important; }
+          .fit-inner { transform: none !important; width: auto !important; }
         }
       `}</style>
 
@@ -684,6 +810,50 @@ export default function PrintBills() {
             </div>
           </div>
         )}
+        {!loading && shown.length > 0 && (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-white px-4 py-3">
+            <p className="text-sm font-semibold text-slate-800">
+              {canShare ? '📤 PDF แยกห้อง — แตะเลขห้องเพื่อส่งต่อ (LINE / บันทึกลงเครื่อง)' : '⬇️ ดาวน์โหลด PDF แยกห้อง — คลิกเลขห้อง ได้ไฟล์ PDF ห้องนั้นทันที'}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {shown.map((b) => (
+                <button
+                  key={`pdf-${b.roomId}`}
+                  type="button"
+                  onClick={() => runOne(b)}
+                  disabled={Boolean(pdfBusy)}
+                  title={`PDF บิลห้อง ${b.roomNumber}`}
+                  className={`min-w-[52px] rounded-md border px-2.5 py-1.5 text-sm font-semibold disabled:opacity-50 ${
+                    b.saved ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-300 bg-white text-slate-700'
+                  } hover:bg-emerald-100`}
+                >
+                  {b.roomNumber}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-slate-400">ปุ่มสีเขียว = บิลห้องนั้นบันทึกในระบบแล้ว · ไฟล์ชื่อ บิล_ห้อง01_เดือน.pdf</p>
+          </div>
+        )}
+        {shareReady && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-800">
+            PDF ห้อง {shareReady.roomNumber} พร้อมแล้ว
+            <button
+              type="button"
+              onClick={async () => {
+                const f = shareReady.file;
+                setShareReady(null);
+                try {
+                  await shareFile(f);
+                } catch (err) {
+                  setError(`แชร์ไม่สำเร็จ: ${err.message || err}`);
+                }
+              }}
+              className="rounded-md bg-sky-600 px-3 py-1 font-semibold text-white"
+            >
+              📤 แตะเพื่อส่งต่อ
+            </button>
+          </div>
+        )}
         {pdfBusy && (
           <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">⏳ {pdfBusy}</div>
         )}
@@ -700,18 +870,37 @@ export default function PrintBills() {
         )}
         <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
           ✏️ <b>คลิกที่ช่องใดก็ได้ในบิลเพื่อแก้ไข</b> (ช่องจะเป็นสีเหลืองตอนแก้) · คลิกกล่อง ☐ แอร์ / ☐ พัดลม เพื่อติ๊กเอง ·
-          ใส่จำนวนเงินแล้วช่องรวมเงินบวกให้อัตโนมัติ · การแก้ไขเก็บไว้ในเครื่องนี้ ไม่กระทบข้อมูลในระบบ
+          ใส่จำนวนเงินแล้วช่องรวมเงินบวกให้อัตโนมัติ · ยอดที่พิมพ์จะเห็นเฉพาะเครื่องนี้จนกว่าจะกด <b>💾 บันทึกบิลเข้าระบบ</b> —
+          บันทึกแล้วเปิดจากมือถือ/คอมเครื่องไหนก็เห็นยอดเดียวกัน
         </div>
+        {isNarrow && (
+          <label className="mt-2 inline-flex items-center gap-1.5 text-sm text-slate-700">
+            <input type="checkbox" checked={fitMode} onChange={(e) => setFitMode(e.target.checked)} />
+            ย่อบิลให้พอดีจอ (เอาออกเพื่อดูขนาดจริง แล้วเลื่อนซ้าย-ขวา / ถ่างนิ้วซูมได้)
+          </label>
+        )}
         <p className="mt-2 text-xs text-slate-400">ตัวอย่างก่อนพิมพ์ ↓ (เวลาพิมพ์ ตั้งกระดาษ A4 แนวตั้ง, Margins: Default, เปิด "Background graphics")</p>
       </div>
 
       {loading ? (
         <p className="mt-6 text-sm text-slate-400">กำลังโหลด…</p>
       ) : (
-        <div className="mt-3 flex flex-col items-center gap-6 bg-slate-100 py-6 print:mt-0 print:block print:bg-white print:py-0">
+        <div
+          className={`mt-3 flex flex-col gap-6 bg-slate-100 px-1 py-6 print:mt-0 print:block print:overflow-visible print:bg-white print:px-0 print:py-0 ${
+            isNarrow && !fitMode ? 'items-start overflow-x-auto' : 'items-center'
+          }`}
+        >
           {sheets.map((pair, i) => (
-            <div key={i} className="flex flex-col items-center gap-1.5 print:block">
-            <div className="flex gap-2 text-xs print:hidden">
+            <div key={i} className={`flex flex-col gap-1.5 print:block ${isNarrow && !fitMode ? 'items-start' : 'w-full items-center'}`}>
+            <div className="flex flex-wrap justify-center gap-2 text-xs print:hidden">
+              {pair.filter(Boolean).map((b) =>
+                b.saved ? (
+                  <span key={`st-${b.roomId}`} className="rounded-md bg-emerald-100 px-2 py-1 text-emerald-800">
+                    ✅ ห้อง {b.roomNumber} บันทึกในระบบแล้ว
+                    {Math.abs(billAmounts(b).total - b.saved.total) > 0.009 ? ' · ⚠️ มีการแก้ยอดที่ยังไม่บันทึก' : ''}
+                  </span>
+                ) : null
+              )}
               {pair.filter(Boolean).map((b) => (
                 <button
                   key={b.roomId}
@@ -720,7 +909,7 @@ export default function PrintBills() {
                   disabled={Boolean(pdfBusy)}
                   className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-slate-700 hover:bg-emerald-50 disabled:opacity-50"
                 >
-                  ⬇️ PDF ห้อง {b.roomNumber}
+                  {canShare ? '📤' : '⬇️'} PDF ห้อง {b.roomNumber}
                 </button>
               ))}
               {pair.filter(Boolean).map((b) => (
@@ -736,6 +925,7 @@ export default function PrintBills() {
                 </button>
               ))}
             </div>
+            <FitToWidth enabled={isNarrow && fitMode}>
             <div className="bill-sheet shadow-md">
               <div className="bill-half">
                 <Bill b={pair[0]} set={(f, v) => setField(pair[0].roomId, f, v)} />
@@ -749,6 +939,7 @@ export default function PrintBills() {
                 </>
               )}
             </div>
+            </FitToWidth>
             </div>
           ))}
         </div>

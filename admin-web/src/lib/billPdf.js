@@ -90,6 +90,48 @@ export async function downloadOneBill(el, roomNumber, monthText) {
   download(await billPdfBlob(el), billFileName(roomNumber, monthText));
 }
 
+// Phones: open the share sheet (LINE, Save to Files …) with the PDF so the
+// owner can send it straight to the tenant. Returns 'shared' | 'cancelled' |
+// 'downloaded'. Throws { code: 'NEED_TAP', file } when the browser blocked the
+// share because PDF creation took too long after the tap — the caller then
+// offers a second button that shares the already-built file instantly.
+export function canShareFiles() {
+  try {
+    return typeof navigator !== 'undefined' && !!navigator.canShare &&
+      navigator.canShare({ files: [new File([new Blob(['x'])], 'x.pdf', { type: 'application/pdf' })] });
+  } catch {
+    return false;
+  }
+}
+
+export async function shareFile(file) {
+  try {
+    await navigator.share({ files: [file], title: file.name });
+    return 'shared';
+  } catch (err) {
+    if (err?.name === 'AbortError') return 'cancelled';
+    if (err?.name === 'NotAllowedError') {
+      const e = new Error('NEED_TAP');
+      e.code = 'NEED_TAP';
+      e.file = file;
+      throw e;
+    }
+    download(file, file.name);
+    return 'downloaded';
+  }
+}
+
+export async function shareOneBill(el, roomNumber, monthText) {
+  const name = billFileName(roomNumber, monthText);
+  const blob = await billPdfBlob(el);
+  const file = new File([blob], name, { type: 'application/pdf' });
+  if (!canShareFiles()) {
+    download(blob, name);
+    return 'downloaded';
+  }
+  return shareFile(file);
+}
+
 // items: [{ el, roomNumber }] already in room order.
 // Returns a .zip of per-room PDFs (and onProgress(i, total) while working).
 export async function downloadBillsZip(items, monthText, onProgress) {
