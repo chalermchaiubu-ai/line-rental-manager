@@ -118,9 +118,11 @@ export default function BillGeneration() {
         meter,
         existingBill,
         items: [
-          { label: 'ค่าเช่า', units: null, rate: null, amount: rentAmount },
-          { label: 'ค่าไฟฟ้า', units: meter.electric_units, rate: lease.electric_rate, amount: electricAmount },
-          { label: 'ค่าน้ำ', units: meter.water_units, rate: lease.water_rate, amount: waterAmount },
+          // `type` must be one of the DB's allowed bill_items.item_type values
+          // (bill_items_item_type_check) — the Thai label is only for display.
+          { type: 'rent', label: 'ค่าเช่า', description: 'ค่าเช่าห้อง', units: null, rate: null, amount: rentAmount },
+          { type: 'electricity', label: 'ค่าไฟฟ้า', description: 'ค่าไฟฟ้า', units: meter.electric_units, rate: lease.electric_rate, amount: electricAmount },
+          { type: 'water', label: 'ค่าน้ำ', description: 'ค่าน้ำประปา', units: meter.water_units, rate: lease.water_rate, amount: waterAmount },
         ],
         subtotal,
         lateFee,
@@ -143,6 +145,13 @@ export default function BillGeneration() {
     setResultMsg(null);
     try {
       let billId = preview.existingBill?.id || null;
+      if (preview.existingBill && ['paid', 'verifying'].includes(preview.existingBill.status)) {
+        throw new Error(
+          preview.existingBill.status === 'paid'
+            ? 'บิลนี้ชำระแล้ว — ไม่แก้ไข'
+            : 'ผู้เช่าส่งสลิปแล้ว รอตรวจ — ไม่แก้ไข (ตรวจสลิปก่อน)'
+        );
+      }
 
       if (billId) {
         const { error: updErr } = await supabase
@@ -178,20 +187,17 @@ export default function BillGeneration() {
         billId = inserted.id;
       }
 
-      // Always refresh bill_items from scratch so a correction (e.g. a
-      // revised meter unit) never leaves stale line items behind — this is
-      // the gap the n8n "Generate Bill" workflow has (it skips re-inserting
-      // items on an existing bill); this page fixes it by always deleting +
-      // re-inserting.
-      const { error: delErr } = await supabase.from('bill_items').delete().eq('bill_id', billId);
-      if (delErr) throw delErr;
+      // Replace bill_items: insert the new rows first, then remove the old
+      // ones, so a failed insert never leaves the bill with no line items.
+      const { data: oldItems, error: oldErr } = await supabase.from('bill_items').select('id').eq('bill_id', billId);
+      if (oldErr) throw oldErr;
 
       const itemRows = preview.items
-        .filter((item) => item.amount !== 0 || item.label === 'ค่าเช่า')
+        .filter((item) => item.amount !== 0 || item.type === 'rent')
         .map((item) => ({
           bill_id: billId,
-          item_type: item.label,
-          description: item.label,
+          item_type: item.type,
+          description: item.description,
           quantity: item.units ?? 1,
           unit_price: item.rate ?? item.amount,
           amount: item.amount,
@@ -201,6 +207,12 @@ export default function BillGeneration() {
         }));
       const { error: itemsErr } = await supabase.from('bill_items').insert(itemRows);
       if (itemsErr) throw itemsErr;
+
+      const oldIds = (oldItems || []).map((r) => r.id);
+      if (oldIds.length) {
+        const { error: delErr } = await supabase.from('bill_items').delete().in('id', oldIds);
+        if (delErr) throw delErr;
+      }
 
       setResultMsg(
         preview.existingBill

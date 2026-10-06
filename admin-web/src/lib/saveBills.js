@@ -135,10 +135,24 @@ export async function saveBills(bills, { readingsMonth, issueDate }, onProgress)
         billId = ins.id;
       }
       // Rebuild line items so a corrected amount never leaves stale rows.
-      const { error: dErr } = await supabase.from('bill_items').delete().eq('bill_id', billId);
-      if (dErr) throw dErr;
-      const { error: iErr } = await supabase.from('bill_items').insert(itemRows(billId, b, a));
+      // Insert the new rows first, then remove the old ones, so a failed
+      // insert never leaves the bill without items.
+      const { data: oldItems, error: oErr } = await supabase.from('bill_items').select('id').eq('bill_id', billId);
+      if (oErr) throw oErr;
+      let rows = itemRows(billId, b, a);
+      let { error: iErr } = await supabase.from('bill_items').insert(rows);
+      if (iErr && iErr.code === '23514') {
+        // bill_items_item_type_check rejected a type: keep the 3 core types
+        // and record fine / other as 'other' with a clear description.
+        rows = rows.map((r) => (['rent', 'electricity', 'water'].includes(r.item_type) ? r : { ...r, item_type: 'other' }));
+        ({ error: iErr } = await supabase.from('bill_items').insert(rows));
+      }
       if (iErr) throw iErr;
+      const oldIds = (oldItems || []).map((r) => r.id);
+      if (oldIds.length) {
+        const { error: dErr } = await supabase.from('bill_items').delete().in('id', oldIds);
+        if (dErr) throw dErr;
+      }
       results.push({ roomNumber: b.roomNumber, ok: true, billId, tenantId: lease.tenant_id });
     } catch (err) {
       results.push({ roomNumber: b.roomNumber, ok: false, reason: err.message || String(err) });
