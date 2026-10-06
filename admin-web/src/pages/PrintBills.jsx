@@ -376,7 +376,11 @@ export default function PrintBills() {
   const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < 800);
   const [fitMode, setFitMode] = useState(true);
   const [shareReady, setShareReady] = useState(null); // File waiting for a second tap (iPhone)
-  const canShare = useMemo(() => canShareFiles(), []);
+  // Share sheet only on phones/tablets; on a PC the button just downloads.
+  const canShare = useMemo(
+    () => canShareFiles() && typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches,
+    []
+  );
   useEffect(() => {
     const onResize = () => setIsNarrow(window.innerWidth < 800);
     window.addEventListener('resize', onResize);
